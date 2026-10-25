@@ -42,6 +42,51 @@ function toast(msg, ms = 2600) {
   toast._t = setTimeout(() => (t.hidden = true), ms);
 }
 
+/* Uploads one file as the raw request body (XHR for progress). Resolves to {path, name, size}. */
+function uploadFile(file, dir, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/files/upload?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(file.name)}`);
+    xhr.setRequestHeader("X-Hangar", "1");
+    xhr.setRequestHeader("Content-Type", "application/octet-stream");
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress?.(e.loaded / e.total);
+    xhr.onload = () => {
+      let data = null;
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401) showLogin();
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+      else reject(new Error(data?.detail || `Upload failed (HTTP ${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed (network error)"));
+    xhr.send(file);
+  });
+}
+
+/* Uploads several files one after another, with progress in a toast. Returns the uploaded results. */
+async function uploadAll(files, dir) {
+  const list = [...files];
+  const done = [];
+  for (const [i, f] of list.entries()) {
+    const label = list.length > 1 ? `(${i + 1}/${list.length}) ` : "";
+    toast(`Uploading ${label}${f.name}…`, 600000);
+    try {
+      done.push(await uploadFile(f, dir, (p) => toast(`Uploading ${label}${f.name}… ${Math.round(p * 100)}%`, 600000)));
+    } catch (e) {
+      toast(`${f.name}: ${e.message}`, 6000);
+      return done;
+    }
+  }
+  toast(done.length === 1 ? `Uploaded ${done[0].name}` : `Uploaded ${done.length} files`);
+  return done;
+}
+
+/* A path as Claude Code's @-mention, relative to the session folder when possible. */
+function mention(path, base) {
+  let rel = path;
+  if (base && path.startsWith(base.replace(/\/$/, "") + "/")) rel = path.slice(base.replace(/\/$/, "").length + 1);
+  return /\s/.test(rel) ? `@"${rel}"` : `@${rel}`;
+}
+
 /* ---------------- formatting ---------------- */
 
 const fmt = {
@@ -81,6 +126,13 @@ const fmt = {
       : d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
   },
   money(n) { return n == null ? "" : "$" + n.toFixed(n >= 100 ? 0 : 2); },
+  size(n) {
+    if (n == null) return "";
+    if (n < 1024) return n + " B";
+    const u = ["KB", "MB", "GB", "TB"]; let i = -1;
+    do { n /= 1024; i++; } while (n >= 1024 && i < u.length - 1);
+    return n.toFixed(n >= 10 ? 0 : 1) + " " + u[i];
+  },
 };
 
 function level(p) {
@@ -473,6 +525,8 @@ function sessionView({ id, tmuxName }) {
   let tab = null;
   let lastTranscriptKey = "";
   let trTimer = null;
+  let filesDir = null;      // folder shown in the Files tab
+  let showHidden = false;
 
   const find = () => state.sessions.find((s) => (id ? s.id === id : s.tmux?.name === tmuxName));
   let s = find() || { id, title: "Loading…", tmux: tmuxName ? { name: tmuxName } : null, meta: {} };
@@ -512,7 +566,7 @@ function sessionView({ id, tmuxName }) {
       actions.push(`<button class="btn small ghost" id="copy" title="Copy the command to resume this session in any terminal">Copy resume cmd</button>`);
     }
     if (live) actions.push(`<button class="btn small danger" id="kill" title="Close the tmux session (the conversation stays resumable)">Stop</button>`);
-    const tabs = [live && "terminal", s.id && !s.pending && "transcript", s.id && "notes"].filter(Boolean);
+    const tabs = [live && "terminal", s.id && !s.pending && "transcript", folder() && "files", s.id && "notes"].filter(Boolean);
     el.innerHTML = `<div class="s-head-top"><div style="min-width:0;flex:1">
         <h1>${s.id ? `<button id="rename" title="Rename">${esc(s.title)}</button>` : esc(s.title)}</h1>
         <div class="s-meta">${meta}</div></div><div class="s-actions">${actions.join("")}</div></div>
@@ -536,6 +590,21 @@ function sessionView({ id, tmuxName }) {
       term?.dispose(); term = null;
       await loadSessions();
     });
+  }
+
+  function folder() { return s.cwd || s.tmux?.cwd || ""; }
+
+  /* Upload into the session folder and put @file references into Claude's prompt (not sent). */
+  async function attach(fileList) {
+    if (!folder()) return toast("This session has no folder");
+    const done = await uploadAll(fileList, folder());
+    if (!done.length) return;
+    if (s.tmux && tab === "terminal") {
+      const text = done.map((d) => mention(d.path, folder())).join(" ") + " ";
+      await api(`/api/tmux/${s.tmux.name}/send`, { method: "POST", body: { text, enter: false } }).catch((e) => toast(e.message));
+      term?.focus();
+    }
+    if (tab === "files") loadFiles();
   }
 
   async function saveMeta(fields) {
@@ -588,13 +657,16 @@ function sessionView({ id, tmuxName }) {
     if (name === "terminal") {
       body.innerHTML = `<div class="term-wrap"><div class="term" id="term"></div>
         <div class="keybar" aria-label="Keys">${KEYS.map(([l, , t]) => `<button data-key="${esc(l)}" title="${esc(t || l)}">${esc(l)}</button>`).join("")}
+          <button data-key="attach" title="Upload files to the session folder and mention them in the prompt">+ Attach</button>
           <button data-key="compose" title="Type or paste a longer message">✎ Type</button></div>
+        <input type="file" id="attach-input" multiple hidden>
         <form class="compose" id="compose" hidden><textarea id="compose-text" rows="1" placeholder="Message to send to the session (Enter sends, Shift+Enter for a new line)"></textarea>
           <button class="btn primary" type="submit">Send</button></form></div>`;
       term = new TermClient($("#term"), s.tmux.name, () => { s.tmux = null; loadSessions(); });
       body.querySelector(".keybar").addEventListener("click", (e) => {
         const b = e.target.closest("[data-key]");
         if (!b) return;
+        if (b.dataset.key === "attach") { $("#attach-input").click(); return; }
         if (b.dataset.key === "compose") {
           const f = $("#compose"); f.hidden = !f.hidden; if (!f.hidden) $("#compose-text").focus(); term.fit(); return;
         }
@@ -602,6 +674,7 @@ function sessionView({ id, tmuxName }) {
         term.send(k[1]);
         term.focus();
       });
+      $("#attach-input").addEventListener("change", (e) => { const f = e.target.files; if (f.length) attach(f); e.target.value = ""; });
       const ta = $("#compose-text");
       ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#compose").requestSubmit(); } });
       ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(160, ta.scrollHeight) + "px"; });
@@ -619,6 +692,24 @@ function sessionView({ id, tmuxName }) {
       body.innerHTML = `<div class="scroll" id="tr-scroll"><div class="transcript" id="tr"><p class="muted">Loading…</p></div></div>`;
       loadTranscript();
       trTimer = setInterval(() => !document.hidden && s.tmux && loadTranscript(), 5000);
+    } else if (name === "files") {
+      if (!filesDir) filesDir = folder();
+      body.innerHTML = `<div class="scroll" id="files-scroll"><div class="files">
+        <div class="files-bar"><div class="files-path" id="files-path"></div>
+          <label class="dim files-hidden"><input type="checkbox" id="files-hidden" ${showHidden ? "checked" : ""}> Hidden</label>
+          <button class="btn small" id="files-refresh" title="Refresh">Refresh</button>
+          <button class="btn primary small" id="files-upload">Upload</button>
+          <input type="file" id="files-input" multiple hidden></div>
+        <div class="dropzone" id="dropzone">Drop files anywhere here to upload them to this folder</div>
+        <div id="files-list"><p class="muted">Loading…</p></div></div></div>`;
+      $("#files-upload").addEventListener("click", () => $("#files-input").click());
+      $("#files-input").addEventListener("change", async (e) => {
+        const f = e.target.files; if (!f.length) return;
+        await uploadAll(f, filesDir); e.target.value = ""; loadFiles();
+      });
+      $("#files-refresh").addEventListener("click", loadFiles);
+      $("#files-hidden").addEventListener("change", (e) => { showHidden = e.target.checked; loadFiles(); });
+      loadFiles();
     } else if (name === "notes") {
       body.innerHTML = `<div class="scroll"><div class="notes"><label for="notes" class="dim">Private notes for this session (saved in Hangar, not sent to Claude)</label>
         <textarea id="notes" placeholder="What was this for? What's left to do?">${esc(s.meta?.notes || "")}</textarea>
@@ -626,6 +717,53 @@ function sessionView({ id, tmuxName }) {
       $("#save-notes").addEventListener("click", async () => { await saveMeta({ notes: $("#notes").value }); toast("Notes saved"); });
     }
   }
+
+  async function loadFiles() {
+    const el = $("#files-list");
+    if (!el) return;
+    let d;
+    try { d = await api(`/api/files?path=${encodeURIComponent(filesDir)}`); }
+    catch (e) { el.innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+    if (disposed || !$("#files-list")) return;
+    filesDir = d.path;
+    const root = folder();
+    const rel = d.path === root ? "" : d.path.startsWith(root + "/") ? d.path.slice(root.length + 1) : null;
+    $("#files-path").innerHTML = (d.parent ? `<button class="btn small ghost" data-go="${esc(d.parent)}" title="Up one folder">↑ Up</button>` : "")
+      + `<span title="${esc(d.path)}">${rel === null ? esc(d.path) : rel === "" ? "Session folder" : `Session folder / ${esc(rel)}`}</span>`
+      + (rel !== "" ? ` <button class="btn small ghost" data-go="${esc(root)}">Back to session folder</button>` : "");
+    const entries = d.entries.filter((e) => showHidden || !e.name.startsWith("."));
+    const href = (e, inline) => `/api/files/download?path=${encodeURIComponent(d.path + "/" + e.name)}${inline ? "&inline=true" : ""}`;
+    const canMention = !!s.tmux;
+    el.innerHTML = entries.length ? `<table class="file-list"><thead><tr><th>Name</th><th class="hide-sm">Modified</th><th>Size</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>
+      ${entries.map((e) => `<tr>
+        <td class="fname">${e.dir ? `<button class="linkish" data-go="${esc(d.path + "/" + e.name)}"><span class="ficon">▸</span>${esc(e.name)}/</button>`
+          : `<a href="${href(e, true)}" target="_blank" rel="noopener">${esc(e.name)}</a>`}</td>
+        <td class="dim hide-sm">${fmt.ago(e.mtime)}</td><td class="dim">${e.dir ? "" : fmt.size(e.size)}</td>
+        <td class="factions">${e.dir ? "" : `<a class="btn small ghost" href="${href(e)}" download title="Download">Download</a>`}
+          ${canMention ? `<button class="btn small ghost" data-mention="${esc(d.path + "/" + e.name)}" title="Type a reference to this into Claude's prompt">@ Mention</button>` : ""}</td></tr>`).join("")}
+      </tbody></table>${d.truncated ? `<p class="muted">Showing the first 2000 items.</p>` : ""}`
+      : `<p class="muted">This folder is empty${!showHidden && d.entries.length ? " (hidden files not shown)" : ""}.</p>`;
+    $("#files-scroll").querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => { filesDir = b.dataset.go; loadFiles(); }));
+    el.querySelectorAll("[data-mention]").forEach((b) => b.addEventListener("click", async () => {
+      await api(`/api/tmux/${s.tmux.name}/send`, { method: "POST", body: { text: mention(b.dataset.mention, root) + " ", enter: false } })
+        .then(() => toast("Added to the prompt. Open the Terminal tab to finish your message.")).catch((e) => toast(e.message));
+    }));
+  }
+
+  // Drag and drop: Files tab uploads to the shown folder; elsewhere to the session folder (+ mention in the terminal).
+  const sbody = $("#s-body");
+  let dragDepth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  sbody.addEventListener("dragenter", (e) => { if (!hasFiles(e) || !folder()) return; e.preventDefault(); dragDepth++; sbody.classList.add("dragging"); });
+  sbody.addEventListener("dragover", (e) => { if (hasFiles(e) && folder()) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+  sbody.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; sbody.classList.remove("dragging"); } });
+  sbody.addEventListener("drop", async (e) => {
+    if (!hasFiles(e) || !folder()) return;
+    e.preventDefault(); dragDepth = 0; sbody.classList.remove("dragging");
+    const f = e.dataTransfer.files;
+    if (!f.length) return;
+    if (tab === "files") { await uploadAll(f, filesDir); loadFiles(); } else attach(f);
+  });
 
   async function loadTranscript() {
     if (!s.id) return;

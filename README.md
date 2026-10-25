@@ -20,6 +20,7 @@ It also has a dashboard with your Claude plan usage and token activity.
 - **Claude usage.** Your 5-hour and weekly limits (the same numbers `/usage` shows), when they reset, and a warning when you're on pace to hit 100%. Also shows Claude status page incidents.
 - **Token activity.** Daily and hourly input and output tokens from the local logs, plus the busiest projects and the models used today.
 - **Claude can install what it needs.** In Docker, Claude can `sudo apt-get install` missing tools. You get a permission prompt for every sudo command, even in auto mode, and installed packages come back after the container is recreated.
+- **File uploads.** Each session has a **Files** tab for its folder: upload by button or drag and drop, browse subfolders, and download what Claude made. In the terminal, **+ Attach** (or dropping a file on it) uploads into the session folder and types `@file` into Claude's prompt, so you can add a question before sending.
 - **Pins, archive, renames, and private notes** for each session.
 
 | Session terminal | Transcript | Phone |
@@ -114,6 +115,7 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 | `HANGAR_CLAUDE_CMD` | `claude` | Path to the Claude Code binary. |
 | `HANGAR_TMUX_SOCKET` | tmux default | Use a specific tmux server socket. |
 | `HANGAR_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
+| `HANGAR_MAX_UPLOAD_MB` | `512` | Largest file you can upload from the browser. |
 | `HANGAR_SECURE_COOKIES` | `false` | Mark the login cookie HTTPS-only. |
 | `HANGAR_HOSTNAME` | system hostname | Name shown in the UI. |
 
@@ -124,7 +126,8 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - Use a long password. Logins are rate-limited (10 attempts per 5 minutes per address) and the cookie is signed. Changing the password signs everyone out.
 - Don't forward the port to the internet. Use your LAN, Tailscale, or another VPN.
 - Every API request needs the login cookie, and requests that change anything also need a custom header, which blocks cross-site requests. Terminal WebSockets check the page origin.
-- New sessions can only start inside `HANGAR_WORKSPACES`. A terminal can still `cd` anywhere the container can see, so only mount what you need.
+- New sessions, uploads, and downloads are limited to `HANGAR_WORKSPACES`. Downloaded files are served with a sandbox policy, so an uploaded HTML file can't run scripts as Hangar.
+- A terminal can still `cd` anywhere the container can see, so only mount what you need.
 - In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
 - Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it.
 

@@ -34,6 +34,7 @@ class Settings:
     autorestore: bool = False         # reopen sessions that were running when Hangar last stopped
     usage_poll_minutes: float = 5
     secure_cookies: bool = False      # set when served over HTTPS only
+    max_upload_mb: int = 512
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,6 +54,7 @@ class Settings:
         s.autorestore = _bool(e.get("HANGAR_AUTORESTORE"))
         s.usage_poll_minutes = max(1.0, float(e.get("HANGAR_USAGE_POLL_MINUTES", s.usage_poll_minutes)))
         s.secure_cookies = _bool(e.get("HANGAR_SECURE_COOKIES"))
+        s.max_upload_mb = max(1, int(e.get("HANGAR_MAX_UPLOAD_MB") or s.max_upload_mb))
         s.data_dir.mkdir(parents=True, exist_ok=True)
         return s
 

@@ -345,6 +345,37 @@ table.data { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.data th, table.data td { text-align: right; padding: 3px 6px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
 table.data th:first-child, table.data td:first-child { text-align: left; }
 
+/* ---------- files ---------- */
+.files { max-width: 980px; margin: 0 auto; padding: 14px 20px 60px; display: grid; gap: 10px; }
+.files-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.files-path { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; font-weight: 600; overflow: hidden; }
+.files-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.files-hidden { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.dropzone {
+  border: 1.5px dashed var(--border); border-radius: var(--radius); padding: 12px; text-align: center; color: var(--text-3);
+  font-size: 13px;
+}
+#s-body { position: relative; }
+#s-body.dragging::after {
+  content: "Drop to upload to the session folder"; position: absolute; inset: 8px; z-index: 10; display: grid;
+  place-items: center; border: 2px dashed var(--accent); border-radius: var(--radius); background: color-mix(in srgb, var(--accent-soft) 85%, transparent);
+  color: var(--text); font-weight: 600; pointer-events: none;
+}
+table.file-list { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+table.file-list th { text-align: left; font-weight: 500; color: var(--text-3); font-size: 12px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+table.file-list td { padding: 5px 8px; border-bottom: 1px solid var(--border); white-space: nowrap; font-variant-numeric: tabular-nums; }
+table.file-list td.fname { white-space: normal; word-break: break-all; width: 100%; }
+table.file-list td.fname a { color: var(--text); text-decoration: none; }
+table.file-list td.fname a:hover { text-decoration: underline; }
+td.factions { text-align: right; }
+.linkish { background: none; border: 0; padding: 0; color: var(--text); font: inherit; font-weight: 600; cursor: pointer; text-align: left; }
+.linkish:hover { text-decoration: underline; }
+.ficon { color: var(--text-3); margin-right: 6px; }
+@media (max-width: 800px) {
+  .files { padding: 12px 16px 40px; }
+  .dropzone, .hide-sm { display: none; }
+}
+
 /* ---------- small screens ---------- */
 @media (max-width: 1000px) {
   .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }

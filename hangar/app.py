@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, auth, tmux
+from . import __version__, auth, files, tmux
 from .config import settings
 from .sessions import index, transcript
 from .store import all_meta, set_meta
@@ -285,10 +285,7 @@ async def restore_dismiss():
 
 # ---------- folders (new session picker) ----------
 
-def _inside_workspace(path: str) -> bool:
-    real = os.path.realpath(path)
-    return any(real == os.path.realpath(w) or real.startswith(os.path.realpath(w).rstrip("/") + "/")
-               for w in settings.workspaces)
+_inside_workspace = files.inside_workspace
 
 
 @app.get("/api/dirs")
@@ -306,6 +303,50 @@ async def dirs(path: str = ""):
     parent = os.path.dirname(real)
     return {"path": real, "parent": parent if _inside_workspace(parent) else "",
             "dirs": [{"name": e.name, "path": os.path.join(real, e.name)} for e in entries[:500]]}
+
+
+# ---------- files ----------
+
+@app.get("/api/files")
+async def files_list(path: str):
+    try:
+        return await asyncio.to_thread(files.listing, path)
+    except files.FileError as e:
+        _err(e, e.code)
+
+
+@app.get("/api/files/download")
+async def files_download(path: str, inline: bool = False):
+    try:
+        real = await asyncio.to_thread(files.download_path, path)
+    except files.FileError as e:
+        _err(e, e.code)
+    resp = FileResponse(real, filename=Path(real).name, content_disposition_type="inline" if inline else "attachment")
+    resp.headers["Content-Security-Policy"] = "sandbox"  # never run uploaded HTML/JS in Hangar's origin
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.post("/api/files/upload")
+async def files_upload(request: Request, dir: str, name: str, overwrite: bool = False):
+    """Raw request body is the file (no multipart), so large files stream straight to disk."""
+    try:
+        up = await asyncio.to_thread(files.Upload, dir, name, overwrite)
+    except files.FileError as e:
+        _err(e, e.code)
+    except OSError as e:
+        _err(e)
+    try:
+        async for chunk in request.stream():
+            if chunk:
+                await asyncio.to_thread(up.write, chunk)
+        return await asyncio.to_thread(up.finish)
+    except files.FileError as e:
+        up.abort()
+        _err(e, e.code)
+    except Exception:
+        up.abort()
+        raise
 
 
 # ---------- dashboard ----------

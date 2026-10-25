@@ -23,6 +23,7 @@ services:
       HANGAR_AUTORESTORE: ${HANGAR_AUTORESTORE:-true}
       HANGAR_HOSTNAME: ${HANGAR_HOSTNAME:-}
       HANGAR_CLAUDE_ARGS: ${HANGAR_CLAUDE_ARGS:-}
+      HANGAR_MAX_UPLOAD_MB: ${HANGAR_MAX_UPLOAD_MB:-512}
       TZ: ${TZ:-UTC}
     volumes:
       # Your projects, mounted at the SAME path as on the host. Claude Code files sessions by
