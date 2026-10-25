@@ -1,0 +1,42 @@
+# Copy .env.example to .env and set WORKSPACE and HANGAR_PASSWORD first.
+#   docker compose up -d --build     start
+#   docker compose down              stop (conversations stay resumable)
+services:
+  hangar:
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+        CLAUDE_VERSION: ${CLAUDE_VERSION:-stable}
+        EXTRA_PACKAGES: ${EXTRA_PACKAGES:-}
+    image: hangar:local
+    container_name: hangar
+    hostname: ${HANGAR_HOSTNAME:-hangar}
+    restart: unless-stopped
+    ports:
+      - "${HANGAR_BIND:-0.0.0.0}:${HANGAR_PORT:-7878}:7878"
+    environment:
+      HANGAR_PASSWORD: ${HANGAR_PASSWORD:-}
+      HANGAR_WORKSPACES: ${WORKSPACE:?Set WORKSPACE in .env}
+      HANGAR_AUTORESTORE: ${HANGAR_AUTORESTORE:-true}
+      HANGAR_HOSTNAME: ${HANGAR_HOSTNAME:-}
+      HANGAR_CLAUDE_ARGS: ${HANGAR_CLAUDE_ARGS:-}
+      HANGAR_DISKS: ${WORKSPACE},/data
+      TZ: ${TZ:-UTC}
+    volumes:
+      # Your projects, mounted at the SAME path as on the host. Claude Code files sessions by
+      # folder path, so this is what lets sessions started here and on the host resume each other.
+      - ${WORKSPACE}:${WORKSPACE}
+      # Claude Code's login, settings, and session history, shared with the host.
+      - ${CLAUDE_DIR:-${HOME}/.claude}:/home/hangar/.claude
+      # The container user's home (shell history, Claude's ~/.claude.json) and Hangar's database.
+      - hangar-home:/home/hangar
+      - hangar-data:/data
+      # Optional: use your git identity and SSH keys inside sessions.
+      # - ${HOME}/.gitconfig:/home/hangar/.gitconfig:ro
+      # - ${HOME}/.ssh:/home/hangar/.ssh:ro
+
+volumes:
+  hangar-home:
+  hangar-data:

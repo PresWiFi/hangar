@@ -1,0 +1,11 @@
+# Experimental, native Linux hosts only (not Docker Desktop): run sessions in the HOST's tmux
+# server instead of inside the container, so they use the host's tools and outlive the container.
+# The host must already have tmux running (`tmux new -d -s main`) for the socket to exist.
+#   docker compose -f docker-compose.yml -f docker-compose.host-tmux.yml up -d --build
+services:
+  hangar:
+    pid: host  # lets Hangar see the host's Claude processes for live status
+    environment:
+      HANGAR_TMUX_SOCKET: /tmp/tmux-host/default
+    volumes:
+      - /tmp/tmux-${UID:-1000}:/tmp/tmux-host

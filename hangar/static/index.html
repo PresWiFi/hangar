@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <title>Hangar</title>
+  <meta name="description" content="Keep track of your Claude Code sessions and pick them back up from any device.">
+  <meta name="theme-color" content="#14161b">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <link rel="stylesheet" href="/static/vendor/xterm.css">
+  <link rel="stylesheet" href="/static/app.css?v=1">
+  <script>
+    try { const t = localStorage.getItem("hangar.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+  </script>
+</head>
+<body>
+  <div id="login" class="login" hidden>
+    <form id="login-form" class="login-card">
+      <div class="brand big"><span class="logo" aria-hidden="true"></span><span>Hangar</span></div>
+      <p class="muted">Your Claude Code sessions, from any device.</p>
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password" required autofocus>
+      <button class="btn primary" type="submit">Sign in</button>
+      <p id="login-error" class="error" role="alert"></p>
+      <p class="hint">The password is <code>HANGAR_PASSWORD</code>, or the one Hangar printed in its log on first start.</p>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <aside id="sidebar" class="sidebar" aria-label="Sessions">
+      <div class="side-head">
+        <a href="#/" class="brand"><span class="logo" aria-hidden="true"></span><span>Hangar</span></a>
+        <button class="icon-btn only-mobile" id="close-side" aria-label="Close menu">✕</button>
+      </div>
+      <button class="btn primary wide" id="new-session"><span aria-hidden="true">+</span> New session</button>
+      <div class="search">
+        <input id="search" type="search" placeholder="Search sessions" aria-label="Search sessions" autocomplete="off">
+      </div>
+      <div class="filters">
+        <select id="project-filter" aria-label="Filter by project"><option value="">All projects</option></select>
+        <label class="check"><input type="checkbox" id="show-archived"> Archived</label>
+      </div>
+      <nav id="session-list" class="session-list"></nav>
+      <div id="side-foot" class="side-foot"></div>
+    </aside>
+    <div id="scrim" class="scrim" hidden></div>
+    <main id="main" class="main"></main>
+  </div>
+
+  <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="dialog" class="dialog"></dialog>
+
+  <script src="/static/vendor/xterm.js"></script>
+  <script src="/static/vendor/addon-fit.js"></script>
+  <script src="/static/vendor/addon-web-links.js"></script>
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/purify.min.js"></script>
+  <script src="/static/app.js?v=1"></script>
+</body>
+</html>

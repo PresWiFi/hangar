@@ -1,0 +1,935 @@
+/* Hangar front end. Plain JS, no build step. */
+"use strict";
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+const state = {
+  me: null,
+  sessions: [],
+  restorable: 0,
+  overview: null,
+  q: "",
+  project: "",
+  showArchived: false,
+  view: null,          // current main view controller (has .dispose())
+  sessionTab: {},      // remembered tab per session
+};
+
+/* ---------------- api ---------------- */
+
+async function api(path, opts = {}) {
+  const init = { method: opts.method || "GET", headers: { "X-Hangar": "1" }, credentials: "same-origin" };
+  if (opts.body !== undefined) {
+    init.headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(opts.body);
+  }
+  const res = await fetch(path, init);
+  if (res.status === 401 && path !== "/api/login") {
+    showLogin();
+    throw new Error("Sign in required");
+  }
+  const data = res.headers.get("content-type")?.includes("json") ? await res.json() : null;
+  if (!res.ok) throw new Error(data?.detail || `HTTP ${res.status}`);
+  return data;
+}
+
+function toast(msg, ms = 2600) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.hidden = false;
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => (t.hidden = true), ms);
+}
+
+/* ---------------- formatting ---------------- */
+
+const fmt = {
+  tokens(n) {
+    n = n || 0;
+    if (n >= 1e9) return (n / 1e9).toFixed(1) + "B";
+    if (n >= 1e6) return (n / 1e6).toFixed(n >= 1e7 ? 0 : 1) + "M";
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
+    return String(Math.round(n));
+  },
+  bytes(n) {
+    if (n == null) return "–";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + u[i];
+  },
+  rate(n) { return n == null ? "–" : fmt.bytes(n) + "/s"; },
+  pct(n) { return n == null ? "–" : Math.round(n) + "%"; },
+  ago(ts) {
+    if (!ts) return "";
+    const s = Date.now() / 1000 - ts;
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s / 60) + "m ago";
+    if (s < 86400) return Math.floor(s / 3600) + "h ago";
+    if (s < 86400 * 7) return Math.floor(s / 86400) + "d ago";
+    return new Date(ts * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  },
+  until(iso) {
+    if (!iso) return "";
+    let s = (new Date(iso) - Date.now()) / 1000;
+    if (s <= 0) return "now";
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60);
+    if (d) return `${d}d ${h}h`;
+    if (h) return `${h}h ${m}m`;
+    return `${m}m`;
+  },
+  when(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const sameDay = d.toDateString() === new Date().toDateString();
+    return sameDay ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+      : d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
+  },
+  duration(s) {
+    if (!s) return "–";
+    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+  },
+  money(n) { return n == null ? "" : "$" + n.toFixed(n >= 100 ? 0 : 2); },
+};
+
+function level(p) {
+  if (p >= 90) return { cls: "critical", label: "Near limit", icon: "●" };
+  if (p >= 75) return { cls: "warning", label: "High", icon: "▲" };
+  return { cls: "", label: "", icon: "" };
+}
+
+/* ---------------- auth ---------------- */
+
+function showLogin() {
+  $("#app").hidden = true;
+  $("#login").hidden = false;
+  stopPolling();
+  setTimeout(() => $("#login-password").focus(), 50);
+}
+
+$("#login-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("#login-error").textContent = "";
+  try {
+    await api("/api/login", { method: "POST", body: { password: $("#login-password").value } });
+    $("#login-password").value = "";
+    boot();
+  } catch (err) {
+    $("#login-error").textContent = err.message;
+  }
+});
+
+/* ---------------- polling ---------------- */
+
+const timers = {};
+function startPolling() {
+  stopPolling();
+  const loopFn = (name, fn, ms) => {
+    const tick = async () => {
+      if (!document.hidden) { try { await fn(); } catch (e) { /* shown elsewhere */ } }
+      timers[name] = setTimeout(tick, ms);
+    };
+    tick();
+  };
+  loopFn("sessions", loadSessions, 4000);
+  loopFn("overview", loadOverview, 3000);
+}
+function stopPolling() { for (const k in timers) clearTimeout(timers[k]); }
+document.addEventListener("visibilitychange", () => { if (!document.hidden && state.me) { loadSessions(); loadOverview(); } });
+
+async function loadSessions() {
+  const data = await api("/api/sessions" + (state.q ? "?q=" + encodeURIComponent(state.q) : ""));
+  state.sessions = data.sessions;
+  state.restorable = data.restorable;
+  renderSidebar();
+  state.view?.onSessions?.();
+}
+
+async function loadOverview() {
+  state.overview = await api("/api/overview");
+  renderSideFoot();
+  state.view?.onOverview?.();
+}
+
+/* ---------------- sidebar ---------------- */
+
+function liveStatus(s) {
+  const t = s.tmux;
+  if (!t) return null;
+  if (t.claude) return t.claude.status === "busy" ? "busy" : "idle";
+  return "shell";
+}
+const STATUS_TEXT = { busy: "Working", idle: "Waiting", shell: "Shell" };
+
+function sessionHref(s) {
+  return s.id ? `#/s/${s.id}` : `#/t/${s.tmux?.name}`;
+}
+
+function renderSidebar() {
+  const list = $("#session-list");
+  const route = location.hash;
+  const projects = [...new Set(state.sessions.map((s) => s.project).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const sel = $("#project-filter");
+  const want = ["", ...projects].join("\n");
+  if (sel.dataset.opts !== want) {
+    sel.innerHTML = `<option value="">All projects</option>` + projects.map((p) => `<option>${esc(p)}</option>`).join("");
+    sel.value = projects.includes(state.project) ? state.project : "";
+    sel.dataset.opts = want;
+  }
+
+  const items = state.sessions.filter((s) =>
+    (!state.project || s.project === state.project) && (state.showArchived ? s.meta?.archived : !s.meta?.archived || s.tmux));
+  const running = items.filter((s) => s.tmux);
+  const pinned = items.filter((s) => !s.tmux && s.meta?.pinned);
+  const rest = items.filter((s) => !s.tmux && !s.meta?.pinned);
+
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+  const groups = [["Today", startOfDay], ["Yesterday", startOfDay - 86400], ["Previous 7 days", startOfDay - 7 * 86400],
+    ["Previous 30 days", startOfDay - 30 * 86400], ["Older", -Infinity]];
+  const buckets = groups.map(() => []);
+  for (const s of rest) buckets[groups.findIndex(([, t]) => (s.updated || 0) >= t)].push(s);
+
+  const row = (s) => {
+    const st = liveStatus(s);
+    const href = sessionHref(s);
+    const sub = [s.project, st ? STATUS_TEXT[st] : fmt.ago(s.updated)].filter(Boolean).join(" · ");
+    const dotCls = st || (s.meta?.pinned ? "pin" : "");
+    return `<a class="s-item${route === href ? " active" : ""}" href="${esc(href)}" title="${esc(s.title)}">
+      <span class="dot ${dotCls}" aria-hidden="true"></span><span class="s-title">${esc(s.title)}</span>
+      <span class="s-sub">${esc(sub)}</span></a>`;
+  };
+
+  let html = "";
+  if (running.length) html += `<div class="group-label">Running <span>${running.length}</span></div>` + running.map(row).join("");
+  if (state.restorable && !running.length && !state.q) {
+    html += `<div class="group-label">Last run</div><button class="btn small wide" data-act="restore">Restore ${state.restorable} session${state.restorable > 1 ? "s" : ""}</button>`;
+  }
+  if (pinned.length) html += `<div class="group-label">Pinned</div>` + pinned.map(row).join("");
+  buckets.forEach((b, i) => { if (b.length) html += `<div class="group-label">${groups[i][0]}</div>` + b.map(row).join(""); });
+  if (!items.length) html = `<div class="empty">${state.q ? "No sessions match." : state.showArchived ? "No archived sessions." : "No sessions yet. Start one with “New session”."}</div>`;
+  list.innerHTML = html;
+}
+
+function renderSideFoot() {
+  const o = state.overview;
+  if (!o) return;
+  const u = o.usage?.limits || [];
+  const pick = ["five_hour", "seven_day"].map((k) => u.find((l) => l.key === k)).filter(Boolean);
+  const sys = o.system?.now || {};
+  const meter = (label, p, title) => {
+    const lv = level(p ?? 0);
+    return `<div class="mini-meter" title="${esc(title || "")}"><span>${esc(label)}</span>
+      <div class="bar"><i class="${lv.cls}" style="width:${Math.min(100, p || 0)}%"></i></div><span class="val">${fmt.pct(p)}</span></div>`;
+  };
+  const theme = document.documentElement.dataset.theme || "auto";
+  $("#side-foot").innerHTML = `
+    ${pick.map((l) => meter(l.key === "five_hour" ? "Session" : "Weekly", l.utilization, `${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
+    ${o.error && !pick.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
+    ${meter("CPU", sys.cpu)}
+    ${meter("Memory", sys.mem_pct, `${fmt.bytes(sys.mem_used)} of ${fmt.bytes(sys.mem_total)}`)}
+    <div class="foot-row"><span title="Host">${esc(sys.hostname || state.me?.hostname || "")}</span>
+      <span><button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
+      <button class="icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">⎋</button></span></div>`;
+}
+
+$("#search").addEventListener("input", (e) => {
+  state.q = e.target.value.trim();
+  clearTimeout(renderSidebar._t);
+  renderSidebar._t = setTimeout(loadSessions, 200);
+});
+$("#project-filter").addEventListener("change", (e) => { state.project = e.target.value; renderSidebar(); });
+$("#show-archived").addEventListener("change", (e) => { state.showArchived = e.target.checked; renderSidebar(); });
+$("#new-session").addEventListener("click", () => openNewSession());
+$("#close-side").addEventListener("click", () => toggleSide(false));
+$("#scrim").addEventListener("click", () => toggleSide(false));
+$("#session-list").addEventListener("click", (e) => {
+  if (e.target.closest(".s-item")) toggleSide(false);
+});
+
+document.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-act]");
+  if (!btn) return;
+  const act = btn.dataset.act;
+  if (act === "logout") {
+    await api("/api/logout", { method: "POST" }).catch(() => {});
+    showLogin();
+  } else if (act === "theme") {
+    const order = ["auto", "light", "dark"];
+    const cur = document.documentElement.dataset.theme || "auto";
+    const next = order[(order.indexOf(cur) + 1) % 3];
+    if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+    try { next === "auto" ? localStorage.removeItem("hangar.theme") : localStorage.setItem("hangar.theme", next); } catch {}
+    renderSideFoot();
+    state.view?.onTheme?.();
+  } else if (act === "restore") {
+    btn.disabled = true;
+    const r = await api("/api/restore", { method: "POST" }).catch((err) => toast(err.message));
+    if (r) toast(`Restored ${r.started.length} session${r.started.length === 1 ? "" : "s"}`);
+    loadSessions();
+  } else if (act === "dismiss-restore") {
+    await api("/api/restore/dismiss", { method: "POST" }).catch(() => {});
+    loadSessions();
+  } else if (act === "menu") {
+    toggleSide(true);
+  } else if (act === "new") {
+    openNewSession();
+  }
+});
+
+function toggleSide(open) {
+  $("#app").classList.toggle("side-open", open);
+  $("#scrim").hidden = !open;
+}
+
+/* ---------------- charts ---------------- */
+
+const tip = $("#tooltip");
+function showTip(html, x, y) {
+  tip.innerHTML = html;
+  tip.hidden = false;
+  const r = tip.getBoundingClientRect();
+  let left = x + 14, top = y - r.height - 10;
+  if (left + r.width > innerWidth - 8) left = x - r.width - 14;
+  if (top < 8) top = y + 16;
+  tip.style.left = left + "px";
+  tip.style.top = top + "px";
+}
+function hideTip() { tip.hidden = true; }
+
+/* Bar chart: one series, rounded data-end, 2px gaps, hover tooltip per bar. */
+function barChart(values, { labels, tips, height = 120, highlightLast = false, ticks = 3, fmtY = fmt.tokens } = {}) {
+  const W = 600, H = height, padL = 34, padB = 18, padT = 6;
+  const max = Math.max(1, ...values);
+  const n = values.length;
+  const slot = (W - padL) / n;
+  const bw = Math.max(2, slot - 2);
+  let g = "";
+  for (let i = 0; i <= ticks; i++) {
+    const v = (max / ticks) * i;
+    const y = H - padB - ((H - padB - padT) * i) / ticks;
+    g += `<line class="gridline" x1="${padL}" x2="${W}" y1="${y}" y2="${y}"/><text class="axis" x="${padL - 6}" y="${y + 3.5}" text-anchor="end">${esc(fmtY(v))}</text>`;
+  }
+  values.forEach((v, i) => {
+    const h = (v / max) * (H - padB - padT);
+    const x = padL + i * slot + 1;
+    const y = H - padB - h;
+    const r = Math.min(4, bw / 2, h);
+    // Rounded top, square base.
+    const path = h <= 0 ? "" : `M${x},${H - padB} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + bw - r},${y} Q${x + bw},${y} ${x + bw},${y + r} L${x + bw},${H - padB} Z`;
+    const dim = highlightLast && i !== n - 1 ? " dim" : "";
+    g += `<path class="mark${dim}" d="${path}"/>`;
+    g += `<rect class="hit" x="${padL + i * slot}" y="${padT}" width="${slot}" height="${H - padT}" data-tip="${esc(tips ? tips[i] : fmtY(v))}"/>`;
+    if (labels && labels[i]) g += `<text class="axis" x="${x + bw / 2}" y="${H - 4}" text-anchor="middle">${esc(labels[i])}</text>`;
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px" role="img">${g}</svg>`;
+}
+
+/* Sparkline: one series, 2px line, crosshair + tooltip on hover. */
+function sparkline(points, key, { fmtV = fmt.pct, max = null, height = 46 } = {}) {
+  const vals = points.map((p) => p[key]);
+  const W = 300, H = height;
+  const real = vals.filter((v) => v != null);
+  if (real.length < 2) return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="height:${H}px"></svg>`;
+  const top = max ?? Math.max(1, ...real) * 1.1;
+  const n = vals.length;
+  const xy = vals.map((v, i) => [(i / (n - 1)) * W, H - 2 - ((v ?? 0) / top) * (H - 4)]);
+  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
+  const area = `${line} L${W},${H} L0,${H} Z`;
+  const data = esc(JSON.stringify(points.map((p) => [p.t, p[key]])));
+  return `<svg class="chart spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px"
+    data-spark="${data}" data-max="${top}" data-fmt="${fmtV === fmt.rate ? "rate" : "pct"}">
+    <path class="area" d="${area}"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/>
+    <line class="cross" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden" vector-effect="non-scaling-stroke"/></svg>`;
+}
+
+document.addEventListener("pointermove", (e) => {
+  const hit = e.target.closest?.("[data-tip]");
+  if (hit) { showTip(hit.dataset.tip, e.clientX, e.clientY); return; }
+  const spark = e.target.closest?.("[data-spark]");
+  if (spark) {
+    const pts = JSON.parse(spark.dataset.spark);
+    const r = spark.getBoundingClientRect();
+    const i = Math.max(0, Math.min(pts.length - 1, Math.round(((e.clientX - r.left) / r.width) * (pts.length - 1))));
+    const cross = spark.querySelector(".cross");
+    const x = (i / (pts.length - 1)) * 300;
+    cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
+    const [t, v] = pts[i];
+    const f = spark.dataset.fmt === "rate" ? fmt.rate : fmt.pct;
+    showTip(`<b>${esc(f(v))}</b><br>${new Date(t * 1000).toLocaleTimeString()}`, e.clientX, e.clientY);
+    return;
+  }
+  hideTip();
+  document.querySelectorAll(".spark .cross[visibility=visible]").forEach((c) => c.setAttribute("visibility", "hidden"));
+});
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.("[data-tip],[data-spark]")) hideTip(); });
+
+/* ---------------- router ---------------- */
+
+function setMain(html) {
+  $("#main").innerHTML = html;
+}
+
+function route() {
+  state.view?.dispose?.();
+  state.view = null;
+  hideTip();
+  const h = location.hash || "#/";
+  let m;
+  if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
+  else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
+  else state.view = dashboardView();
+  renderSidebar();
+}
+window.addEventListener("hashchange", route);
+
+function topbar(title) {
+  return `<div class="topbar"><button class="icon-btn" data-act="menu" aria-label="Open menu">☰</button>
+    <span class="t">${esc(title)}</span><button class="icon-btn" data-act="new" aria-label="New session">+</button></div>`;
+}
+
+/* ---------------- dashboard ---------------- */
+
+function dashboardView() {
+  setMain(`${topbar("Hangar")}<div class="scroll"><div class="page" id="dash"></div></div>`);
+  const previews = {};
+  let disposed = false;
+
+  async function loadPreviews() {
+    const running = state.sessions.filter((s) => s.tmux).slice(0, 6);
+    await Promise.all(running.map(async (s) => {
+      try { previews[s.tmux.name] = (await api(`/api/tmux/${s.tmux.name}/preview?lines=14`)).text; } catch {}
+    }));
+    if (!disposed) render();
+  }
+  const pv = setInterval(() => !document.hidden && loadPreviews(), 5000);
+
+  function usageCard(o) {
+    const u = o.usage;
+    if (!u && o.error) return `<div class="card span-5"><h2>Claude usage</h2><p class="muted">${esc(o.error)}</p></div>`;
+    if (!u) return `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`;
+    const meters = u.limits.map((l) => {
+      const lv = level(l.utilization);
+      const pace = l.pace != null && l.pace >= 100 && l.utilization >= 20;
+      return `<div class="meter">
+        <div class="meter-top"><span>${esc(l.label)}</span><b>${fmt.pct(l.utilization)}</b></div>
+        <div class="bar"><i class="${lv.cls}" style="width:${Math.min(100, l.utilization)}%"></i></div>
+        <div class="meter-sub"><span>${l.resets_at ? `${l.ends === "expires" ? "Expires" : "Resets"} in ${fmt.until(l.resets_at)} · ${fmt.when(l.resets_at)}` : ""}</span>
+          <span>${lv.label ? `<span class="status-tag ${lv.cls}"><span class="sw" style="background:var(--${lv.cls})"></span>${lv.label}</span> ` : ""}${pace ? `<span class="status-tag serious" title="If you keep this rate up"><span class="sw" style="background:var(--serious)"></span>On pace for ${Math.round(l.pace)}%</span>` : ""}</span></div>
+      </div>`;
+    }).join("");
+    const extra = u.extra_usage ? `<div class="meter-sub"><span>Extra usage: ${fmt.money(u.extra_usage.used_credits / 100)} of ${fmt.money(u.extra_usage.monthly_limit / 100)}</span></div>` : "";
+    const plan = u.plan ? `<span class="badge">${esc(u.plan)}</span>` : "";
+    return `<div class="card span-5"><h2><span>Claude usage</span><span>${plan}
+      <button class="btn small ghost" id="usage-refresh" title="Updated ${esc(fmt.when(u.fetched_at))}">↻</button></span></h2>
+      ${meters}${extra}${o.error ? `<p class="dim" style="font-size:12px;margin:8px 0 0">${esc(o.error)}</p>` : ""}</div>`;
+  }
+
+  function activityCard(st) {
+    const days = st.days;
+    const labels = days.map((d, i) => (i % 2 === (days.length - 1) % 2 ? new Date(d.date + "T12:00").toLocaleDateString(undefined, { weekday: "narrow" }) : ""));
+    const tips = days.map((d) => `${new Date(d.date + "T12:00").toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}<br><b>${fmt.tokens(d.io)}</b> input + output · ${d.messages} replies<br>${fmt.tokens(d.cache)} cache`);
+    const t = st.today;
+    return `<div class="card span-7"><h2><span>Token activity</span><span class="dim">this machine’s logs</span></h2>
+      <div class="stat-row">
+        <div class="stat"><div class="k">Today in / out</div><div class="v">${fmt.tokens(t.input + t.output)}</div><div class="s">${fmt.tokens(t.input)} in · ${fmt.tokens(t.output)} out</div></div>
+        <div class="stat"><div class="k">Cache today</div><div class="v">${fmt.tokens(t.cache_read + t.cache_write)}</div><div class="s">${fmt.tokens(t.cache_read)} read</div></div>
+        <div class="stat"><div class="k">Replies today</div><div class="v">${t.messages}</div><div class="s">${t.sessions} session${t.sessions === 1 ? "" : "s"}</div></div>
+        <div class="stat"><div class="k">Last activity</div><div class="v" style="font-size:16px;padding-top:5px">${st.last_activity ? fmt.ago(st.last_activity) : "–"}</div></div>
+      </div>
+      <div style="margin-top:14px" class="dim">Input + output tokens per day, last 14 days</div>
+      ${barChart(days.map((d) => d.io), { labels, tips, height: 120, highlightLast: true })}
+      <details style="margin-top:6px"><summary class="dim" style="cursor:pointer;font-size:12px">Table view</summary>
+        <table class="data"><tr><th>Day</th><th>In + out</th><th>Cache</th><th>Replies</th></tr>
+        ${days.slice().reverse().map((d) => `<tr><td>${esc(d.date)}</td><td>${fmt.tokens(d.io)}</td><td>${fmt.tokens(d.cache)}</td><td>${d.messages}</td></tr>`).join("")}</table></details>
+    </div>`;
+  }
+
+  function projectsCard(st) {
+    const max = Math.max(1, ...st.projects.map((p) => p.tokens));
+    const models = st.today_models.length ? `<div class="dim" style="margin:14px 0 6px">Models today</div><div class="chips">${st.today_models.map(([m, n]) => `<span class="badge">${esc(m)} · ${fmt.tokens(n)}</span>`).join("")}</div>` : "";
+    return `<div class="card span-4"><h2>Projects, last 14 days</h2>
+      <div class="list">${st.projects.map((p) => `<div class="list-row"><span class="name">${esc(p.name)}</span><span class="num">${fmt.tokens(p.tokens)}</span>
+        <div class="hbar"><i style="width:${(p.tokens / max) * 100}%"></i></div></div>`).join("") || `<span class="dim">No activity yet.</span>`}</div>${models}</div>`;
+  }
+
+  function systemCards(sys) {
+    const n = sys.now || {};
+    const h = sys.history || [];
+    if (!n.time) return `<div class="card"><h2>Computer</h2><p class="muted">Collecting…</p></div>`;
+    const cores = (n.per_core || []).map((c) => `<i title="${Math.round(c)}%"><b style="height:${c}%"></b></i>`).join("");
+    const gpus = (n.gpus || []).map((g) => `
+      <div class="spark-row"><div class="spark-head"><span>${esc(g.name)}</span><b>${fmt.pct(g.util)}</b></div>
+      <div class="bar"><i style="width:${g.util || 0}%"></i></div>
+      <div class="meter-sub"><span>VRAM ${fmt.bytes((g.mem_used || 0) * 1048576)} / ${fmt.bytes((g.mem_total || 0) * 1048576)}</span>
+      <span>${g.temp != null ? Math.round(g.temp) + "°C" : ""}${g.power != null ? " · " + Math.round(g.power) + " W" : ""}</span></div></div>`).join("");
+    const disks = (n.disks || []).map((d) => {
+      const lv = level(d.pct);
+      return `<div class="list-row"><span class="name" title="${esc(d.mount)}">${esc(d.mount)}</span><span class="num">${fmt.bytes(d.total - d.used)} free</span>
+      <div class="hbar"><i class="${lv.cls}" style="width:${d.pct}%;${lv.cls ? `background:var(--${lv.cls})` : ""}"></i></div></div>`;
+    }).join("");
+    const procs = (n.procs || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.cpu.toFixed(1)}%</td><td>${fmt.bytes(p.mem)}</td></tr>`).join("");
+    const temps = (n.temps || []).map((t) => `<span class="badge">${esc(t.name)} ${Math.round(t.c)}°C</span>`).join(" ");
+    return `
+      <div class="card span-4"><h2><span>CPU</span><span class="dim">${n.cores} cores${n.load ? " · load " + n.load.map((l) => l.toFixed(2)).join(" ") : ""}</span></h2>
+        <div class="spark-row"><div class="spark-head"><span class="dim">Last ${Math.max(1, Math.round((h.length * 3) / 60))} min</span><b>${fmt.pct(n.cpu)}</b></div>${sparkline(h, "cpu", { max: 100 })}</div>
+        <div class="cores" aria-label="Per-core load">${cores}</div>
+        ${temps ? `<div class="chips" style="margin-top:10px">${temps}</div>` : ""}</div>
+      <div class="card span-4"><h2><span>Memory</span><span class="dim">${fmt.bytes(n.mem_total)}</span></h2>
+        <div class="spark-row"><div class="spark-head"><span class="dim">${fmt.bytes(n.mem_used)} used</span><b>${fmt.pct(n.mem_pct)}</b></div>${sparkline(h, "mem", { max: 100 })}</div>
+        <div class="meter-sub"><span>Swap ${fmt.bytes(n.swap_used)} / ${fmt.bytes(n.swap_total)}</span><span>Up ${fmt.duration(n.uptime)}</span></div>
+        ${gpus ? `<div style="margin-top:14px">${gpus}</div>` : ""}</div>
+      <div class="card span-4"><h2><span>Network</span><span class="dim">${esc(n.hostname)}</span></h2>
+        <div class="spark-row"><div class="spark-head"><span class="dim">Download</span><b>${fmt.rate(n.net_down)}</b></div>${sparkline(h, "down", { fmtV: fmt.rate })}</div>
+        <div class="spark-row"><div class="spark-head"><span class="dim">Upload</span><b>${fmt.rate(n.net_up)}</b></div>${sparkline(h, "up", { fmtV: fmt.rate })}</div></div>
+      <div class="card span-6"><h2>Disks</h2><div class="list">${disks || `<span class="dim">No disks found.</span>`}</div></div>
+      <div class="card span-6"><h2>Top processes</h2><table class="data"><tr><th>Process</th><th>CPU</th><th>Memory</th></tr>${procs}</table></div>`;
+  }
+
+  function statusLine(o) {
+    const s = o.status;
+    if (!s) return "";
+    const ok = s.indicator === "none";
+    const inc = (s.incidents || []).map((i) => `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.name)}</a>`).join(", ");
+    return `<span class="inc"><span class="dot" style="background:var(--${ok ? "good" : s.indicator === "minor" ? "warning" : "critical"})"></span>
+      ${esc(s.description || "")}${inc ? " · " + inc : ""}</span>`;
+  }
+
+  function render() {
+    const o = state.overview;
+    const el = $("#dash");
+    if (!el) return;
+    const running = state.sessions.filter((s) => s.tmux);
+    const runCards = running.map((s) => {
+      const st = liveStatus(s);
+      const text = (previews[s.tmux.name] || "").replace(/\s+$/, "").split("\n").slice(-14).join("\n");
+      return `<a class="run-card" href="${esc(sessionHref(s))}"><header><span class="t">${esc(s.title)}</span>
+        <span class="badge"><span class="dot ${st}"></span>${STATUS_TEXT[st]}</span></header><pre>${esc(text)}</pre></a>`;
+    }).join("");
+    el.innerHTML = `
+      <div class="page-head"><div><h1>${esc(state.me?.hostname || "Hangar")}</h1>
+        <div class="muted">${running.length} running · ${state.sessions.filter((s) => !s.pending).length} sessions on record ${o ? "· " + statusLine(o) : ""}</div></div>
+        <button class="btn primary" data-act="new">+ New session</button></div>
+      ${state.restorable && !running.length ? `<div class="notice"><span>${state.restorable} session${state.restorable > 1 ? "s were" : " was"} running when Hangar last stopped.</span><span><button class="btn small ghost" data-act="dismiss-restore">Dismiss</button> <button class="btn primary small" data-act="restore">Restore</button></span></div>` : ""}
+      ${running.length ? `<div class="card" style="margin-bottom:14px"><h2>Running sessions</h2><div class="run-grid">${runCards}</div></div>` : ""}
+      <div class="grid">
+        ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
+        ${o ? activityCard(o.stats) : ""}
+        ${o ? projectsCard(o.stats) : ""}
+        ${o ? systemCards(o.system) : ""}
+      </div>`;
+    $("#usage-refresh")?.addEventListener("click", async () => { await api("/api/usage/refresh", { method: "POST" }); toast("Refreshing usage…"); });
+  }
+
+  render();
+  loadPreviews();
+  return {
+    onOverview: render,
+    onSessions() {
+      // Fetch previews as soon as a running session shows up, instead of waiting for the next tick.
+      if (state.sessions.some((s) => s.tmux && !(s.tmux.name in previews))) loadPreviews(); else render();
+    },
+    dispose() { disposed = true; clearInterval(pv); },
+  };
+}
+
+/* ---------------- session view ---------------- */
+
+function sessionView({ id, tmuxName }) {
+  let disposed = false;
+  let term = null;
+  let tab = null;
+  let lastTranscriptKey = "";
+  let trTimer = null;
+
+  const find = () => state.sessions.find((s) => (id ? s.id === id : s.tmux?.name === tmuxName));
+  let s = find() || { id, title: "Loading…", tmux: tmuxName ? { name: tmuxName } : null, meta: {} };
+
+  setMain(`${topbar(s.title)}<header class="s-head" id="s-head"></header><div id="s-body" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>`);
+
+  if (id && !find()) {
+    api(`/api/sessions/${id}`).then((d) => { if (!disposed) { s = d; renderHead(); pickTab(); } })
+      .catch(() => { if (!disposed) { setMain(`${topbar("Not found")}<div class="page"><h1>Session not found</h1><p class="muted">It may have been deleted. <a href="#/">Back to dashboard</a></p></div>`); } });
+  }
+
+  function renderHead() {
+    const el = $("#s-head");
+    if (!el) return;
+    const live = s.tmux;
+    const st = liveStatus(s);
+    const tk = s.tokens ? s.tokens.input + s.tokens.output : null;
+    const meta = [
+      s.cwd && `<span title="${esc(s.cwd)}">${esc(s.cwd.replace(/^.*\/([^/]+\/[^/]+)$/, "…/$1"))}</span>`,
+      s.git_branch && `<span>⎇ ${esc(s.git_branch)}</span>`,
+      s.models?.length && `<span>${esc(s.models.join(", "))}</span>`,
+      tk != null && `<span>${fmt.tokens(tk)} tokens in/out</span>`,
+      s.cost != null && `<span>${fmt.money(s.cost)} API-equivalent</span>`,
+      s.updated && `<span class="hide-sm">Updated ${fmt.ago(s.updated)}</span>`,
+      live && `<span class="hide-sm">tmux: ${esc(live.name)}</span>`,
+    ].filter(Boolean).join("");
+    const actions = [];
+    if (live) {
+      actions.push(`<span class="badge"><span class="dot ${st}"></span>${STATUS_TEXT[st] || "Running"}</span>`);
+    } else if (s.id && !s.pending) {
+      actions.push(`<button class="btn primary small" id="resume">▶ Resume</button>`);
+    }
+    if (s.id && !s.pending) actions.push(`<button class="btn small" id="fork" title="Start a copy of this conversation with a new ID">Fork</button>`);
+    if (s.id) {
+      actions.push(`<button class="btn small" id="pin">${s.meta?.pinned ? "Unpin" : "Pin"}</button>`);
+      actions.push(`<button class="btn small" id="archive">${s.meta?.archived ? "Unarchive" : "Archive"}</button>`);
+      actions.push(`<button class="btn small ghost" id="copy" title="Copy the command to resume this session in any terminal">Copy resume cmd</button>`);
+    }
+    if (live) actions.push(`<button class="btn small danger" id="kill" title="Close the tmux session (the conversation stays resumable)">Stop</button>`);
+    const tabs = [live && "terminal", s.id && !s.pending && "transcript", s.id && "notes"].filter(Boolean);
+    el.innerHTML = `<div class="s-head-top"><div style="min-width:0;flex:1">
+        <h1>${s.id ? `<button id="rename" title="Rename">${esc(s.title)}</button>` : esc(s.title)}</h1>
+        <div class="s-meta">${meta}</div></div><div class="s-actions">${actions.join("")}</div></div>
+      <div class="tabs" role="tablist">${tabs.map((t) => `<button class="tab" role="tab" data-tab="${t}" aria-selected="${t === tab}">${t[0].toUpperCase() + t.slice(1)}</button>`).join("")}</div>`;
+    const tb = $(".topbar .t");
+    if (tb) tb.textContent = s.title;
+
+    el.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+    $("#resume")?.addEventListener("click", () => resume(false));
+    $("#fork")?.addEventListener("click", () => resume(true));
+    $("#pin")?.addEventListener("click", () => saveMeta({ pinned: !s.meta?.pinned }));
+    $("#archive")?.addEventListener("click", () => saveMeta({ archived: !s.meta?.archived }));
+    $("#rename")?.addEventListener("click", rename);
+    $("#copy")?.addEventListener("click", async () => {
+      const cmd = `cd ${JSON.stringify(s.cwd || ".")} && claude --resume ${s.id}`;
+      try { await navigator.clipboard.writeText(cmd); toast("Copied"); } catch { prompt("Copy this command:", cmd); }
+    });
+    $("#kill")?.addEventListener("click", async () => {
+      if (!confirm("Stop this tmux session? Claude will exit, but you can resume the conversation later.")) return;
+      await api(`/api/tmux/${live.name}/kill`, { method: "POST" }).catch((e) => toast(e.message));
+      term?.dispose(); term = null;
+      await loadSessions();
+    });
+  }
+
+  async function saveMeta(fields) {
+    try {
+      const m = await api(`/api/sessions/${s.id}/meta`, { method: "PATCH", body: fields });
+      s.meta = { name: m.name, pinned: !!m.pinned, archived: !!m.archived, notes: m.notes };
+      if (fields.name !== undefined) s.title = m.name || s.ai_title || s.first_prompt || s.title;
+      renderHead();
+      loadSessions();
+    } catch (e) { toast(e.message); }
+  }
+
+  function rename() {
+    const name = prompt("Session name (leave empty to use the AI title):", s.meta?.name || s.title);
+    if (name === null) return;
+    saveMeta({ name: name.trim() });
+  }
+
+  async function resume(fork) {
+    try {
+      const r = await api(`/api/sessions/${s.id}/resume`, { method: "POST", body: { fork } });
+      toast(fork ? "Forked into a new session" : r.already_running ? "Already running" : "Resumed in tmux");
+      await loadSessions();
+      if (fork) {
+        // The fork gets a new ID once Claude writes its log; open it by tmux name until then.
+        location.hash = `#/t/${r.name}`;
+      } else {
+        s = find() || s;
+        tab = "terminal";
+        renderHead();
+        showTab("terminal");
+      }
+    } catch (e) { toast(e.message); }
+  }
+
+  function pickTab() {
+    const want = state.sessionTab[id || tmuxName];
+    if (want && (want !== "terminal" || s.tmux)) return showTab(want);
+    showTab(s.tmux ? "terminal" : s.id && !s.pending ? "transcript" : "notes");
+  }
+
+  function showTab(name) {
+    if (name === tab && $("#s-body").childElementCount) return;
+    tab = name;
+    state.sessionTab[id || tmuxName] = name;
+    clearInterval(trTimer);
+    if (name !== "terminal" && term) { term.dispose(); term = null; }
+    renderHead();
+    const body = $("#s-body");
+    if (name === "terminal") {
+      body.innerHTML = `<div class="term-wrap"><div class="term" id="term"></div>
+        <div class="keybar" aria-label="Keys">${KEYS.map(([l, , t]) => `<button data-key="${esc(l)}" title="${esc(t || l)}">${esc(l)}</button>`).join("")}
+          <button data-key="compose" title="Type or paste a longer message">✎ Type</button></div>
+        <form class="compose" id="compose" hidden><textarea id="compose-text" rows="1" placeholder="Message to send to the session (Enter sends, Shift+Enter for a new line)"></textarea>
+          <button class="btn primary" type="submit">Send</button></form></div>`;
+      term = new TermClient($("#term"), s.tmux.name, () => { s.tmux = null; loadSessions(); });
+      body.querySelector(".keybar").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-key]");
+        if (!b) return;
+        if (b.dataset.key === "compose") {
+          const f = $("#compose"); f.hidden = !f.hidden; if (!f.hidden) $("#compose-text").focus(); term.fit(); return;
+        }
+        const k = KEYS.find(([l]) => l === b.dataset.key);
+        term.send(k[1]);
+        term.focus();
+      });
+      const ta = $("#compose-text");
+      ta.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); $("#compose").requestSubmit(); } });
+      ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(160, ta.scrollHeight) + "px"; });
+      $("#compose").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const text = ta.value;
+        if (!text.trim()) return;
+        try {
+          await api(`/api/tmux/${s.tmux.name}/send`, { method: "POST", body: { text, enter: true } });
+          ta.value = ""; ta.style.height = "auto";
+        } catch (err) { toast(err.message); }
+      });
+    } else if (name === "transcript") {
+      lastTranscriptKey = "";
+      body.innerHTML = `<div class="scroll" id="tr-scroll"><div class="transcript" id="tr"><p class="muted">Loading…</p></div></div>`;
+      loadTranscript();
+      trTimer = setInterval(() => !document.hidden && s.tmux && loadTranscript(), 5000);
+    } else if (name === "notes") {
+      body.innerHTML = `<div class="scroll"><div class="notes"><label for="notes" class="dim">Private notes for this session (saved in Hangar, not sent to Claude)</label>
+        <textarea id="notes" placeholder="What was this for? What's left to do?">${esc(s.meta?.notes || "")}</textarea>
+        <div><button class="btn primary small" id="save-notes">Save notes</button></div></div></div>`;
+      $("#save-notes").addEventListener("click", async () => { await saveMeta({ notes: $("#notes").value }); toast("Notes saved"); });
+    }
+  }
+
+  async function loadTranscript() {
+    if (!s.id) return;
+    const data = await api(`/api/sessions/${s.id}/transcript`).catch(() => null);
+    const el = $("#tr");
+    if (!data || !el || disposed) return;
+    const key = data.items.length + ":" + (data.items.at(-1)?.text || data.items.at(-1)?.result || "").length;
+    if (key === lastTranscriptKey) return;
+    lastTranscriptKey = key;
+    const sc = $("#tr-scroll");
+    const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80 || !el.dataset.done;
+    el.innerHTML = renderTranscript(data.items) || `<p class="muted">No messages yet.</p>`;
+    el.dataset.done = "1";
+    if (atBottom) sc.scrollTop = sc.scrollHeight;
+  }
+
+  renderHead();
+  if (find()) pickTab();
+
+  return {
+    onSessions() {
+      const fresh = find();
+      if (!fresh) return;
+      const wasLive = !!s.tmux;
+      s = fresh;
+      renderHead();
+      if (wasLive !== !!s.tmux) {
+        if (s.tmux && tab !== "terminal") showTab("terminal");
+        else if (!s.tmux && tab === "terminal") showTab(s.id && !s.pending ? "transcript" : "notes");
+      } else if (!tab) pickTab();
+    },
+    onTheme() { term?.applyTheme(); },
+    dispose() { disposed = true; clearInterval(trTimer); term?.dispose(); },
+  };
+}
+
+function renderTranscript(items) {
+  const md = (t) => DOMPurify.sanitize(marked.parse(t, { breaks: false, gfm: true }));
+  let html = "";
+  let toolRun = [];
+  const flush = () => {
+    if (!toolRun.length) return;
+    html += `<div class="tool-run">${toolRun.map((t) => `<details class="tool"><summary><span class="tname">${esc(t.name)}</span>
+      <span class="tsum">${esc(t.summary)}</span>${t.error ? `<span class="terr">error</span>` : ""}</summary>
+      <pre>${esc(t.input)}</pre>${t.result != null ? `<pre>${esc(t.result)}</pre>` : ""}</details>`).join("")}</div>`;
+    toolRun = [];
+  };
+  for (const it of items) {
+    if (it.role === "tool") { toolRun.push(it); continue; }
+    flush();
+    const time = it.ts ? new Date(it.ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+    if (it.role === "user") {
+      html += `<div class="msg user"><div class="who"><span>You</span><span>${esc(time)}</span></div><div class="body">${esc(it.text)}</div></div>`;
+    } else {
+      html += `<div class="msg assistant"><div class="who"><span>Claude</span><span>${esc(time)}</span></div><div class="body">${md(it.text)}</div></div>`;
+    }
+  }
+  flush();
+  return html;
+}
+
+/* ---------------- terminal ---------------- */
+
+const KEYS = [
+  ["Esc", "\x1b", "Escape (interrupt Claude)"], ["Tab", "\t"], ["⇧Tab", "\x1b[Z", "Shift+Tab (switch mode)"],
+  ["↑", "\x1b[A"], ["↓", "\x1b[B"], ["←", "\x1b[D"], ["→", "\x1b[C"], ["⏎", "\r", "Enter"],
+  ["^C", "\x03", "Ctrl+C"], ["^D", "\x04", "Ctrl+D"], ["^R", "\x12", "Ctrl+R"], ["^O", "\x0f", "Ctrl+O (transcript)"],
+  ["PgUp", "\x1b[5~"], ["PgDn", "\x1b[6~"], ["y", "y"], ["n", "n"], ["1", "1"], ["2", "2"], ["3", "3"],
+];
+
+const TERM_THEME = {
+  background: "#14161b", foreground: "#d8dae0", cursor: "#d8dae0", cursorAccent: "#14161b",
+  selectionBackground: "#3b4252", black: "#1c1f26", brightBlack: "#5c6370", red: "#e06c75", brightRed: "#ef8891",
+  green: "#98c379", brightGreen: "#b5e090", yellow: "#e5c07b", brightYellow: "#f0d197", blue: "#61afef",
+  brightBlue: "#8cc5f5", magenta: "#c678dd", brightMagenta: "#d79ae8", cyan: "#56b6c2", brightCyan: "#7fd0db",
+  white: "#d8dae0", brightWhite: "#ffffff",
+};
+
+class TermClient {
+  constructor(el, name, onGone) {
+    this.el = el;
+    this.name = name;
+    this.onGone = onGone;
+    this.retry = 0;
+    this.closed = false;
+    const small = innerWidth < 600;
+    this.term = new Terminal({
+      fontFamily: '"JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
+      fontSize: small ? 11 : 13.5, lineHeight: 1.12, cursorBlink: true, scrollback: 5000,
+      allowProposedApi: true, theme: TERM_THEME, macOptionIsMeta: true,
+    });
+    this.fitAddon = new FitAddon.FitAddon();
+    this.term.loadAddon(this.fitAddon);
+    this.term.loadAddon(new WebLinksAddon.WebLinksAddon());
+    this.term.open(el);
+    this.enc = new TextEncoder();
+    this.term.onData((d) => this.send(d));
+    this.term.onBinary((d) => this.sendBytes(Uint8Array.from(d, (c) => c.charCodeAt(0))));
+    this.term.onResize(({ cols, rows }) => this.ctl({ type: "resize", cols, rows }));
+    this.ro = new ResizeObserver(() => this.fit());
+    this.ro.observe(el);
+    this.fit();
+    this.connect();
+    if (!small) this.term.focus();
+  }
+  applyTheme() { this.term.options.theme = TERM_THEME; }
+  fit() { try { this.fitAddon.fit(); } catch {} }
+  focus() { this.term.focus(); }
+  overlay(html) {
+    let o = this.el.parentElement.querySelector(".term-overlay");
+    if (!html) { o?.remove(); return; }
+    if (!o) { o = document.createElement("div"); o.className = "term-overlay"; this.el.parentElement.appendChild(o); }
+    o.innerHTML = `<div class="box">${html}</div>`;
+  }
+  connect() {
+    if (this.closed) return;
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const { cols, rows } = this.term;
+    const ws = new WebSocket(`${proto}://${location.host}/ws/term/${encodeURIComponent(this.name)}?cols=${cols}&rows=${rows}`);
+    ws.binaryType = "arraybuffer";
+    this.ws = ws;
+    ws.onopen = () => { this.retry = 0; this.overlay(null); this.term.reset(); this.fit(); this.ctl({ type: "resize", cols: this.term.cols, rows: this.term.rows }); };
+    ws.onmessage = (e) => {
+      if (typeof e.data === "string") {
+        try { if (JSON.parse(e.data).type === "gone") { this.gone = true; } } catch {}
+        return;
+      }
+      this.term.write(new Uint8Array(e.data));
+    };
+    ws.onclose = (e) => {
+      if (this.closed) return;
+      if (this.gone) {
+        this.overlay(`<b>This tmux session has ended.</b><span>The conversation is saved; use Resume to pick it back up.</span>`);
+        this.onGone?.();
+        return;
+      }
+      if (e.code === 4401) { showLogin(); return; }
+      this.retry++;
+      const wait = Math.min(10000, 500 * 2 ** this.retry);
+      // A clean close with no error usually means the session exited.
+      if (e.code === 1000 && this.retry > 2) {
+        this.overlay(`<b>Session closed.</b><button class="btn small" id="term-reconnect">Reconnect</button>`);
+        this.el.parentElement.querySelector("#term-reconnect")?.addEventListener("click", () => { this.retry = 0; this.connect(); });
+        this.onGone?.();
+        return;
+      }
+      this.overlay(`<b>Disconnected</b><span>Reconnecting…</span>`);
+      this.timer = setTimeout(() => this.connect(), wait);
+    };
+  }
+  send(str) { this.sendBytes(this.enc.encode(str)); }
+  sendBytes(bytes) { if (this.ws?.readyState === 1) this.ws.send(bytes); }
+  ctl(obj) { if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(obj)); }
+  dispose() {
+    this.closed = true;
+    clearTimeout(this.timer);
+    this.ro.disconnect();
+    try { this.ws?.close(); } catch {}
+    this.term.dispose();
+  }
+}
+
+/* ---------------- new session dialog ---------------- */
+
+async function openNewSession() {
+  toggleSide(false);
+  const dlg = $("#dialog");
+  const recent = [...new Set(state.sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 8);
+  let cwd = recent[0] || state.me?.workspaces?.[0] || "";
+  dlg.innerHTML = `<form method="dialog" id="new-form">
+    <h2>New session</h2>
+    <div class="field"><span>Folder</span>
+      ${recent.length ? `<div class="chips">${recent.map((p) => `<button type="button" class="chip" data-cwd="${esc(p)}" title="${esc(p)}">${esc(p.split("/").pop() || p)}</button>`).join("")}</div>` : ""}
+      <div class="picker"><div class="picker-path"><button type="button" class="btn small ghost" id="pk-up" aria-label="Up one folder">↑</button><span id="pk-path"></span></div>
+      <div class="picker-list" id="pk-list"></div></div></div>
+    <div class="field"><span>Name <small>(optional)</small></span><input type="text" id="nf-label" maxlength="60" placeholder="e.g. Fix login bug"></div>
+    <div class="row2">
+      <label class="field"><span>Model</span><select id="nf-model"><option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select></label>
+      <label class="field"><span>Permission mode</span><select id="nf-perm"><option value="">Default</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypassPermissions">Bypass permissions</option></select></label>
+    </div>
+    <label class="check"><input type="checkbox" id="nf-shell"> Plain shell instead of Claude</label>
+    <p class="error" id="nf-err"></p>
+    <div class="dialog-actions"><button type="button" class="btn" id="nf-cancel">Cancel</button><button class="btn primary" id="nf-go" type="submit">Start session</button></div>
+  </form>`;
+  dlg.showModal();
+
+  async function browse(path) {
+    try {
+      const d = await api("/api/dirs?path=" + encodeURIComponent(path || ""));
+      if (d.path) cwd = d.path;
+      $("#pk-path").textContent = d.path ? "‎" + d.path : "Workspaces";
+      $("#pk-up").disabled = !d.parent && !d.path;
+      $("#pk-up").onclick = () => browse(d.parent || "");
+      $("#pk-list").innerHTML = d.dirs.map((x) => `<button type="button" data-path="${esc(x.path)}">${esc(x.name)}</button>`).join("") || `<div class="empty">No subfolders</div>`;
+    } catch (e) {
+      $("#nf-err").textContent = e.message;
+      if (path) browse("");
+    }
+  }
+  $("#pk-list").addEventListener("click", (e) => { const b = e.target.closest("[data-path]"); if (b) browse(b.dataset.path); });
+  dlg.querySelectorAll("[data-cwd]").forEach((b) => b.addEventListener("click", () => browse(b.dataset.cwd)));
+  $("#nf-cancel").addEventListener("click", () => dlg.close());
+  browse(cwd);
+
+  $("#new-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!cwd) { $("#nf-err").textContent = "Pick a folder."; return; }
+    $("#nf-go").disabled = true;
+    try {
+      const r = await api("/api/tmux/new", { method: "POST", body: {
+        cwd, label: $("#nf-label").value, model: $("#nf-model").value, permission_mode: $("#nf-perm").value, shell: $("#nf-shell").checked,
+      } });
+      dlg.close();
+      await loadSessions();
+      location.hash = r.claude_id ? `#/s/${r.claude_id}` : `#/t/${r.name}`;
+    } catch (err) {
+      $("#nf-err").textContent = err.message;
+      $("#nf-go").disabled = false;
+    }
+  });
+}
+
+/* ---------------- boot ---------------- */
+
+async function boot() {
+  try {
+    state.me = await api("/api/me");
+  } catch { return; }
+  $("#login").hidden = true;
+  $("#app").hidden = false;
+  startPolling();
+  route();
+}
+
+boot();
