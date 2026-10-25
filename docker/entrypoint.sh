@@ -49,4 +49,14 @@ alias ll='ls -lah'
 RC
 fi
 
+# Reinstall packages Claude (or you) added with apt before the container was recreated.
+if [ -s /data/apt-packages.txt ] && sudo -n true 2>/dev/null; then
+  missing=$(comm -13 <(sort -u /etc/hangar/base-packages.txt) <(sort -u /data/apt-packages.txt) | while read -r p; do
+    dpkg -s "$p" >/dev/null 2>&1 || echo "$p"; done | xargs)
+  if [ -n "$missing" ]; then
+    echo "Reinstalling packages in the background: $missing (log: /data/apt-restore.log)"
+    ( sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq $missing ) > /data/apt-restore.log 2>&1 &
+  fi
+fi
+
 exec python -m hangar "$@"

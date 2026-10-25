@@ -16,7 +16,6 @@ from . import __version__, auth, tmux
 from .config import settings
 from .sessions import index, transcript
 from .store import all_meta, set_meta
-from .system import monitor
 from .usage import poller
 
 STATIC = Path(__file__).with_name("static")
@@ -26,16 +25,27 @@ PUBLIC_API = {"/api/login", "/api/me"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     poller.start()
-    monitor.start()
     await asyncio.to_thread(index.refresh, 0)
     await asyncio.to_thread(tmux.snapshot_for_restore)
     if settings.autorestore:
         started = await asyncio.to_thread(tmux.restore, _resumable)
         if started:
             print(f"Restored {len(started)} session(s)", flush=True)
+    tracker = asyncio.create_task(_track_open_sessions())  # keep a reference so it is not garbage-collected
     print(f"Hangar {__version__} on http://{settings.host}:{settings.port}  (password: {auth.password_source()})",
           flush=True)
     yield
+    tracker.cancel()
+
+
+async def _track_open_sessions() -> None:
+    """Keep the list of open sessions current even when no browser is polling, so restore works."""
+    while True:
+        await asyncio.sleep(15)
+        try:
+            await asyncio.to_thread(tmux.list_sessions)
+        except Exception:
+            pass
 
 
 def _resumable(claude_id: str) -> bool:
@@ -102,7 +112,7 @@ async def logout():
 async def me(request: Request):
     if not _authed(request):
         return JSONResponse({"authed": False}, status_code=401)
-    return {"authed": True, "version": __version__, "hostname": monitor.hostname, "workspaces": settings.workspaces,
+    return {"authed": True, "version": __version__, "hostname": settings.hostname, "workspaces": settings.workspaces,
             "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None}
 
 
@@ -302,12 +312,7 @@ async def dirs(path: str = ""):
 
 @app.get("/api/overview")
 async def overview():
-    return {**poller.snapshot(), "system": monitor.snapshot(), "stats": await asyncio.to_thread(index.stats)}
-
-
-@app.get("/api/system")
-async def system():
-    return monitor.snapshot()
+    return {**poller.snapshot(), "stats": await asyncio.to_thread(index.stats)}
 
 
 @app.post("/api/usage/refresh")

@@ -7,6 +7,8 @@ ARG GID=1000
 ARG CLAUDE_VERSION=stable
 # Extra Debian packages your sessions need (compilers, language runtimes, ...), space separated.
 ARG EXTRA_PACKAGES=""
+# Let Claude install packages with sudo (each sudo command still asks you first). Set to false to turn off.
+ARG ALLOW_SUDO=true
 
 ENV LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
@@ -19,7 +21,7 @@ ENV LANG=C.UTF-8 \
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      tmux git curl ca-certificates ripgrep jq less nano procps openssh-client tini zstd unzip \
+      tmux git curl ca-certificates ripgrep jq less nano procps openssh-client tini zstd unzip sudo \
       $EXTRA_PACKAGES \
  && rm -rf /var/lib/apt/lists/*
 
@@ -32,7 +34,19 @@ RUN mkdir -p /tmp/ci \
 
 RUN groupadd -g ${GID} hangar 2>/dev/null || true \
  && useradd -m -u ${UID} -g ${GID} -s /bin/bash hangar \
- && mkdir -p /data && chown ${UID}:${GID} /data
+ && mkdir -p /data /etc/hangar && chown ${UID}:${GID} /data \
+ && apt-mark showmanual > /etc/hangar/base-packages.txt \
+ && if [ "$ALLOW_SUDO" = "true" ]; then \
+      echo 'hangar ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/hangar && chmod 440 /etc/sudoers.d/hangar; \
+    fi
+
+# Claude asks before every sudo command, and knows it's in a container where it can install packages.
+COPY docker/claude-settings.json docker/container-prompt.md /etc/hangar/
+COPY docker/apt-remember /etc/apt/apt.conf.d/99hangar-remember
+RUN if [ "$ALLOW_SUDO" != "true" ]; then \
+      printf '# Running inside Hangar\n\nThis session runs in a Docker container without sudo. If a task needs a missing system tool, tell the user to add it to EXTRA_PACKAGES in .env and rebuild.\n' > /etc/hangar/container-prompt.md; \
+    fi
+ENV HANGAR_CLAUDE_BASE_ARGS="--settings /etc/hangar/claude-settings.json --append-system-prompt-file /etc/hangar/container-prompt.md"
 
 WORKDIR /app
 COPY requirements.txt .

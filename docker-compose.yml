@@ -10,6 +10,7 @@ services:
         GID: ${GID:-1000}
         CLAUDE_VERSION: ${CLAUDE_VERSION:-stable}
         EXTRA_PACKAGES: ${EXTRA_PACKAGES:-}
+        ALLOW_SUDO: ${ALLOW_SUDO:-true}
     image: hangar:local
     container_name: hangar
     hostname: ${HANGAR_HOSTNAME:-hangar}
@@ -22,7 +23,6 @@ services:
       HANGAR_AUTORESTORE: ${HANGAR_AUTORESTORE:-true}
       HANGAR_HOSTNAME: ${HANGAR_HOSTNAME:-}
       HANGAR_CLAUDE_ARGS: ${HANGAR_CLAUDE_ARGS:-}
-      HANGAR_DISKS: ${WORKSPACE},/data
       TZ: ${TZ:-UTC}
     volumes:
       # Your projects, mounted at the SAME path as on the host. Claude Code files sessions by

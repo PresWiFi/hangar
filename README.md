@@ -4,7 +4,7 @@
 
 Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview). Every session runs inside tmux, so it keeps going when you close the browser. You can open it again from your laptop, phone, or tablet, over your home network or Tailscale. The layout follows Open WebUI: your sessions are in a sidebar, grouped by date and titled automatically. Each one has a full terminal and a readable transcript.
 
-It also has a dashboard with your Claude plan usage and stats for the machine.
+It also has a dashboard with your Claude plan usage and token activity.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -18,8 +18,8 @@ It also has a dashboard with your Claude plan usage and stats for the machine.
 - **Works on phones.** A key bar for Esc, Shift+Tab, arrows, Ctrl+C and so on, and a compose box for long messages. You can also add it to your home screen as an app.
 - **Live status.** See which sessions are working, which are waiting for you, and which have dropped back to a shell.
 - **Claude usage.** Your 5-hour and weekly limits (the same numbers `/usage` shows), when they reset, and a warning when you're on pace to hit 100%. Also shows Claude status page incidents.
-- **Token activity.** Daily input and output tokens from the local logs, plus the busiest projects and the models used today.
-- **Computer stats.** CPU (per core), memory, network, disks, NVIDIA GPUs, temperatures, and top processes, with short history graphs.
+- **Token activity.** Daily and hourly input and output tokens from the local logs, plus the busiest projects and the models used today.
+- **Claude can install what it needs.** In Docker, Claude can `sudo apt-get install` missing tools. You get a permission prompt for every sudo command, even in auto mode, and installed packages come back after the container is recreated.
 - **Pins, archive, renames, and private notes** for each session.
 
 | Session terminal | Transcript | Phone |
@@ -52,8 +52,6 @@ Run Hangar from your WSL distro, not PowerShell, so it shares the same `~/.claud
 2. In WSL, set `WORKSPACE` to the path WSL uses, for example `/mnt/c/Users/you/code`.
 3. Run `docker compose up -d --build` from WSL.
 
-The computer stats show the WSL virtual machine, not all of Windows.
-
 ## Reaching it from other devices
 
 **Home network:** with the default `HANGAR_BIND=0.0.0.0`, open `http://<machine-ip>:7878` from any device on the network. You may need to allow port 7878 in the host firewall.
@@ -79,7 +77,15 @@ Turn on HTTPS certificates for your tailnet first (admin console > DNS). If you 
 
 ### Tools inside the container
 
-Claude runs inside the container, so its commands can only use what's installed there. That's git, curl, ripgrep, jq, Python 3.12, and a few basics. Add more with `EXTRA_PACKAGES` in `.env`, for example `EXTRA_PACKAGES="build-essential golang nodejs npm"`, and rebuild. If you need the host's full toolchain, run Hangar without Docker (below). On native Linux, you can also try `docker-compose.host-tmux.yml`, which runs sessions in the host's tmux server.
+Claude runs inside the container, so its commands use what's installed there. The image starts with git, curl, ripgrep, jq, Python 3.12, and a few basics. There are three ways to get more:
+
+- **Let Claude install it.** Claude can run `sudo apt-get install`. Every sudo command shows a permission prompt, even in auto mode, so nothing gets installed without your OK. Hangar passes Claude a short note saying it's in a Debian container and can do this.
+- **Packages are kept.** Hangar records what's been installed with apt in `/data/apt-packages.txt` and reinstalls it in the background when the container is recreated (log: `/data/apt-restore.log`). User-level installs (`pip install --user`, `~/.local`, `~/.cargo`, `~/.nvm`) live in the home volume and are kept too. Anything else written to system folders, like `npm install -g`, is lost on recreate.
+- **Bake it into the image.** Set `EXTRA_PACKAGES` in `.env`, for example `EXTRA_PACKAGES="build-essential golang nodejs npm"`, and rebuild.
+
+To turn off sudo entirely, set `ALLOW_SUDO=false` in `.env` and rebuild. The sudo prompt is a Claude Code permission rule (`ask: Bash(sudo:*)`), so it doesn't apply in `bypassPermissions` mode.
+
+If you need the host's full toolchain instead, run Hangar without Docker (below). On native Linux, you can also try `docker-compose.host-tmux.yml`, which runs sessions in the host's tmux server.
 
 ## Running without Docker
 
@@ -104,10 +110,10 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. |
 | `HANGAR_AUTORESTORE` | `false` (`true` in compose) | Resume the sessions that were running when Hangar last stopped. |
 | `HANGAR_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
+| `ALLOW_SUDO` (build) | `true` | Docker only: give Claude sudo, with a permission prompt for each sudo command. |
 | `HANGAR_CLAUDE_CMD` | `claude` | Path to the Claude Code binary. |
 | `HANGAR_TMUX_SOCKET` | tmux default | Use a specific tmux server socket. |
 | `HANGAR_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
-| `HANGAR_DISKS` | auto | Comma-separated paths whose drives to show in the stats. |
 | `HANGAR_SECURE_COOKIES` | `false` | Mark the login cookie HTTPS-only. |
 | `HANGAR_HOSTNAME` | system hostname | Name shown in the UI. |
 
@@ -119,6 +125,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - Don't forward the port to the internet. Use your LAN, Tailscale, or another VPN.
 - Every API request needs the login cookie, and requests that change anything also need a custom header, which blocks cross-site requests. Terminal WebSockets check the page origin.
 - New sessions can only start inside `HANGAR_WORKSPACES`. A terminal can still `cd` anywhere the container can see, so only mount what you need.
+- In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
 - Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it.
 
 ## Notes and limits
@@ -126,11 +133,10 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - The usage numbers come from the same unofficial endpoint Claude Code's `/usage` uses. It rate-limits fast polling, so Hangar checks every 5 minutes and backs off on errors. It only works with a Claude subscription login, not an API key.
 - The "cost" on a session is Claude Code's API-equivalent estimate, not what a subscription charges.
 - Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see.
-- GPU stats need `nvidia-smi` in the container. With Docker, add `gpus: all` to the service and install the NVIDIA Container Toolkit.
 
 ## Development
 
-The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), session logs (`sessions.py`), usage (`usage.py`), system stats (`system.py`), and the terminal bridge (`terminal.py`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
+The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), session logs (`sessions.py`), usage (`usage.py`), and the terminal bridge (`terminal.py`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
 
 ```bash
 HANGAR_PASSWORD=dev HANGAR_PORT=7979 python -m hangar
@@ -139,7 +145,7 @@ HANGAR_PASSWORD=dev HANGAR_PORT=7979 python -m hangar
 ## Credits
 
 - [xterm.js](https://xtermjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0)
-- Usage and system stats are adapted from UsageMeter, a tray app by the same author.
+- The usage dashboard is adapted from UsageMeter, a tray app by the same author.
 
 Hangar is an independent project. It is not made by or affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.
 

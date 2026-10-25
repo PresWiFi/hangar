@@ -141,7 +141,7 @@ def dismiss_restore() -> None:
 
 def claude_command(extra: list[str]) -> str:
     """Shell command that runs Claude and then leaves a shell behind, so the session stays usable."""
-    args = shlex.split(settings.claude_args) + extra
+    args = shlex.split(settings.claude_base_args) + shlex.split(settings.claude_args) + extra
     claude = " ".join([shlex.quote(settings.claude_cmd)] + [shlex.quote(a) for a in args])
     note = "Claude exited. This is a shell in the same folder. Type exit to close the session."
     return f"{claude}; printf '\\n\\033[2m%s\\033[0m\\n' {shlex.quote(note)}; exec \"${{SHELL:-/bin/bash}}\" -l"
@@ -179,6 +179,7 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
     run("set-option", "-t", target, "@hangar_label", label or Path(cwd).name, check=False)
     # Hangar draws its own header, so hide tmux's status bar in sessions it owns.
     run("set-option", "-t", target, "status", "off", check=False)
+    list_sessions(with_live=False)  # record it as open right away, for restore after a restart
     return {"name": name, "claude_id": claude_id or None}
 
 

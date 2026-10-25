@@ -52,14 +52,6 @@ const fmt = {
     if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + "k";
     return String(Math.round(n));
   },
-  bytes(n) {
-    if (n == null) return "–";
-    const u = ["B", "KB", "MB", "GB", "TB"];
-    let i = 0;
-    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    return (n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)) + " " + u[i];
-  },
-  rate(n) { return n == null ? "–" : fmt.bytes(n) + "/s"; },
   pct(n) { return n == null ? "–" : Math.round(n) + "%"; },
   ago(ts) {
     if (!ts) return "";
@@ -87,11 +79,6 @@ const fmt = {
     const sameDay = d.toDateString() === new Date().toDateString();
     return sameDay ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
       : d.toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" });
-  },
-  duration(s) {
-    if (!s) return "–";
-    const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
-    return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
   },
   money(n) { return n == null ? "" : "$" + n.toFixed(n >= 100 ? 0 : 2); },
 };
@@ -136,7 +123,7 @@ function startPolling() {
     tick();
   };
   loopFn("sessions", loadSessions, 4000);
-  loopFn("overview", loadOverview, 3000);
+  loopFn("overview", loadOverview, 15000);
 }
 function stopPolling() { for (const k in timers) clearTimeout(timers[k]); }
 document.addEventListener("visibilitychange", () => { if (!document.hidden && state.me) { loadSessions(); loadOverview(); } });
@@ -220,7 +207,6 @@ function renderSideFoot() {
   if (!o) return;
   const u = o.usage?.limits || [];
   const pick = ["five_hour", "seven_day"].map((k) => u.find((l) => l.key === k)).filter(Boolean);
-  const sys = o.system?.now || {};
   const meter = (label, p, title) => {
     const lv = level(p ?? 0);
     return `<div class="mini-meter" title="${esc(title || "")}"><span>${esc(label)}</span>
@@ -230,9 +216,7 @@ function renderSideFoot() {
   $("#side-foot").innerHTML = `
     ${pick.map((l) => meter(l.key === "five_hour" ? "Session" : "Weekly", l.utilization, `${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
     ${o.error && !pick.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
-    ${meter("CPU", sys.cpu)}
-    ${meter("Memory", sys.mem_pct, `${fmt.bytes(sys.mem_used)} of ${fmt.bytes(sys.mem_total)}`)}
-    <div class="foot-row"><span title="Host">${esc(sys.hostname || state.me?.hostname || "")}</span>
+    <div class="foot-row"><span title="Host">${esc(state.me?.hostname || "")}</span>
       <span><button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
       <button class="icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">⎋</button></span></div>`;
 }
@@ -329,44 +313,12 @@ function barChart(values, { labels, tips, height = 120, highlightLast = false, t
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px" role="img">${g}</svg>`;
 }
 
-/* Sparkline: one series, 2px line, crosshair + tooltip on hover. */
-function sparkline(points, key, { fmtV = fmt.pct, max = null, height = 46 } = {}) {
-  const vals = points.map((p) => p[key]);
-  const W = 300, H = height;
-  const real = vals.filter((v) => v != null);
-  if (real.length < 2) return `<svg class="chart" viewBox="0 0 ${W} ${H}" style="height:${H}px"></svg>`;
-  const top = max ?? Math.max(1, ...real) * 1.1;
-  const n = vals.length;
-  const xy = vals.map((v, i) => [(i / (n - 1)) * W, H - 2 - ((v ?? 0) / top) * (H - 4)]);
-  const line = xy.map(([x, y], i) => `${i ? "L" : "M"}${x.toFixed(1)},${y.toFixed(1)}`).join("");
-  const area = `${line} L${W},${H} L0,${H} Z`;
-  const data = esc(JSON.stringify(points.map((p) => [p.t, p[key]])));
-  return `<svg class="chart spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:${H}px"
-    data-spark="${data}" data-max="${top}" data-fmt="${fmtV === fmt.rate ? "rate" : "pct"}">
-    <path class="area" d="${area}"/><path class="line" d="${line}" vector-effect="non-scaling-stroke"/>
-    <line class="cross" x1="0" x2="0" y1="0" y2="${H}" visibility="hidden" vector-effect="non-scaling-stroke"/></svg>`;
-}
-
 document.addEventListener("pointermove", (e) => {
   const hit = e.target.closest?.("[data-tip]");
   if (hit) { showTip(hit.dataset.tip, e.clientX, e.clientY); return; }
-  const spark = e.target.closest?.("[data-spark]");
-  if (spark) {
-    const pts = JSON.parse(spark.dataset.spark);
-    const r = spark.getBoundingClientRect();
-    const i = Math.max(0, Math.min(pts.length - 1, Math.round(((e.clientX - r.left) / r.width) * (pts.length - 1))));
-    const cross = spark.querySelector(".cross");
-    const x = (i / (pts.length - 1)) * 300;
-    cross.setAttribute("x1", x); cross.setAttribute("x2", x); cross.setAttribute("visibility", "visible");
-    const [t, v] = pts[i];
-    const f = spark.dataset.fmt === "rate" ? fmt.rate : fmt.pct;
-    showTip(`<b>${esc(f(v))}</b><br>${new Date(t * 1000).toLocaleTimeString()}`, e.clientX, e.clientY);
-    return;
-  }
   hideTip();
-  document.querySelectorAll(".spark .cross[visibility=visible]").forEach((c) => c.setAttribute("visibility", "hidden"));
 });
-document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.("[data-tip],[data-spark]")) hideTip(); });
+document.addEventListener("pointerdown", (e) => { if (!e.target.closest?.("[data-tip]")) hideTip(); });
 
 /* ---------------- router ---------------- */
 
@@ -452,42 +404,18 @@ function dashboardView() {
   function projectsCard(st) {
     const max = Math.max(1, ...st.projects.map((p) => p.tokens));
     const models = st.today_models.length ? `<div class="dim" style="margin:14px 0 6px">Models today</div><div class="chips">${st.today_models.map(([m, n]) => `<span class="badge">${esc(m)} · ${fmt.tokens(n)}</span>`).join("")}</div>` : "";
-    return `<div class="card span-4"><h2>Projects, last 14 days</h2>
+    return `<div class="card span-5"><h2>Projects, last 14 days</h2>
       <div class="list">${st.projects.map((p) => `<div class="list-row"><span class="name">${esc(p.name)}</span><span class="num">${fmt.tokens(p.tokens)}</span>
         <div class="hbar"><i style="width:${(p.tokens / max) * 100}%"></i></div></div>`).join("") || `<span class="dim">No activity yet.</span>`}</div>${models}</div>`;
   }
 
-  function systemCards(sys) {
-    const n = sys.now || {};
-    const h = sys.history || [];
-    if (!n.time) return `<div class="card"><h2>Computer</h2><p class="muted">Collecting…</p></div>`;
-    const cores = (n.per_core || []).map((c) => `<i title="${Math.round(c)}%"><b style="height:${c}%"></b></i>`).join("");
-    const gpus = (n.gpus || []).map((g) => `
-      <div class="spark-row"><div class="spark-head"><span>${esc(g.name)}</span><b>${fmt.pct(g.util)}</b></div>
-      <div class="bar"><i style="width:${g.util || 0}%"></i></div>
-      <div class="meter-sub"><span>VRAM ${fmt.bytes((g.mem_used || 0) * 1048576)} / ${fmt.bytes((g.mem_total || 0) * 1048576)}</span>
-      <span>${g.temp != null ? Math.round(g.temp) + "°C" : ""}${g.power != null ? " · " + Math.round(g.power) + " W" : ""}</span></div></div>`).join("");
-    const disks = (n.disks || []).map((d) => {
-      const lv = level(d.pct);
-      return `<div class="list-row"><span class="name" title="${esc(d.mount)}">${esc(d.mount)}</span><span class="num">${fmt.bytes(d.total - d.used)} free</span>
-      <div class="hbar"><i class="${lv.cls}" style="width:${d.pct}%;${lv.cls ? `background:var(--${lv.cls})` : ""}"></i></div></div>`;
-    }).join("");
-    const procs = (n.procs || []).map((p) => `<tr><td>${esc(p.name)}</td><td>${p.cpu.toFixed(1)}%</td><td>${fmt.bytes(p.mem)}</td></tr>`).join("");
-    const temps = (n.temps || []).map((t) => `<span class="badge">${esc(t.name)} ${Math.round(t.c)}°C</span>`).join(" ");
-    return `
-      <div class="card span-4"><h2><span>CPU</span><span class="dim">${n.cores} cores${n.load ? " · load " + n.load.map((l) => l.toFixed(2)).join(" ") : ""}</span></h2>
-        <div class="spark-row"><div class="spark-head"><span class="dim">Last ${Math.max(1, Math.round((h.length * 3) / 60))} min</span><b>${fmt.pct(n.cpu)}</b></div>${sparkline(h, "cpu", { max: 100 })}</div>
-        <div class="cores" aria-label="Per-core load">${cores}</div>
-        ${temps ? `<div class="chips" style="margin-top:10px">${temps}</div>` : ""}</div>
-      <div class="card span-4"><h2><span>Memory</span><span class="dim">${fmt.bytes(n.mem_total)}</span></h2>
-        <div class="spark-row"><div class="spark-head"><span class="dim">${fmt.bytes(n.mem_used)} used</span><b>${fmt.pct(n.mem_pct)}</b></div>${sparkline(h, "mem", { max: 100 })}</div>
-        <div class="meter-sub"><span>Swap ${fmt.bytes(n.swap_used)} / ${fmt.bytes(n.swap_total)}</span><span>Up ${fmt.duration(n.uptime)}</span></div>
-        ${gpus ? `<div style="margin-top:14px">${gpus}</div>` : ""}</div>
-      <div class="card span-4"><h2><span>Network</span><span class="dim">${esc(n.hostname)}</span></h2>
-        <div class="spark-row"><div class="spark-head"><span class="dim">Download</span><b>${fmt.rate(n.net_down)}</b></div>${sparkline(h, "down", { fmtV: fmt.rate })}</div>
-        <div class="spark-row"><div class="spark-head"><span class="dim">Upload</span><b>${fmt.rate(n.net_up)}</b></div>${sparkline(h, "up", { fmtV: fmt.rate })}</div></div>
-      <div class="card span-6"><h2>Disks</h2><div class="list">${disks || `<span class="dim">No disks found.</span>`}</div></div>
-      <div class="card span-6"><h2>Top processes</h2><table class="data"><tr><th>Process</th><th>CPU</th><th>Memory</th></tr>${procs}</table></div>`;
+  function hoursCard(st) {
+    const hours = st.today_hours;
+    const nowH = new Date().getHours();
+    const labels = hours.map((_, h) => (h % 6 === 0 ? (h === 0 ? "12a" : h === 12 ? "12p" : h < 12 ? h + "a" : h - 12 + "p") : ""));
+    const tips = hours.map((v, h) => `${h}:00–${h}:59<br><b>${fmt.tokens(v)}</b> input + output`);
+    return `<div class="card span-7"><h2><span>Today by hour</span><span class="dim">input + output tokens</span></h2>
+      ${barChart(hours.map((v, h) => (h > nowH ? 0 : v)), { labels, tips, height: 150 })}</div>`;
   }
 
   function statusLine(o) {
@@ -520,7 +448,7 @@ function dashboardView() {
         ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
         ${o ? activityCard(o.stats) : ""}
         ${o ? projectsCard(o.stats) : ""}
-        ${o ? systemCards(o.system) : ""}
+        ${o ? hoursCard(o.stats) : ""}
       </div>`;
     $("#usage-refresh")?.addEventListener("click", async () => { await api("/api/usage/refresh", { method: "POST" }); toast("Refreshing usage…"); });
   }

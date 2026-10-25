@@ -1,0 +1,2 @@
+// Remember manually installed packages so the entrypoint can reinstall them after the container is recreated.
+DPkg::Post-Invoke { "if [ -d /data ]; then apt-mark showmanual > /data/apt-packages.txt 2>/dev/null; chown --reference=/data /data/apt-packages.txt 2>/dev/null; fi; true"; };
