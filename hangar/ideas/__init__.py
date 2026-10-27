@@ -10,4 +10,5 @@ def _startup() -> None:
     token.get()  # create the MCP token on first start
 
 
-PLUGIN = Plugin(name="ideas", router=api.router, startup=_startup, authorize=token.authorize)
+PLUGIN = Plugin(name="ideas", router=api.router, startup=_startup, authorize=token.authorize,
+                nav={"label": "Ideas", "href": "#/ideas"}, script="/api/ideas/ui.js", style="/api/ideas/ui.css")

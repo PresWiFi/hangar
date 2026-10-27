@@ -3,15 +3,20 @@ the MCP server signs in with the bearer token. Both are checked by Hangar's guar
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
+from .. import auth, tmux
 from . import repo, token
 
 router = APIRouter(prefix="/api/ideas")
+STATIC = Path(__file__).with_name("static")
 
 SESSION_HEADER = "x-claude-session"
 _UUID = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -163,3 +168,46 @@ async def update_milestone(mid: int, body: MilestonePatch, request: Request):
 async def add_note(ref: str, body: NoteIn, request: Request):
     session = _session(request)
     return await _call(lambda: repo.add_note(repo.resolve(ref), body.text, session))
+
+
+class StartIn(BaseModel):
+    cwd: PathText | None = None    # folder to use when the project has none (or to override it)
+    save_folder: bool = False      # remember cwd as the project's folder
+
+
+@router.post("/projects/{ref}/start-session")
+async def start_session(ref: str, body: StartIn, request: Request):
+    """Open a Claude session in the project's folder, seeded with its summary and next milestone.
+    Web UI only: the MCP token can't start sessions."""
+    if not auth.check_token(request.cookies.get(auth.COOKIE)):
+        raise HTTPException(403, "Starting sessions needs the web UI sign-in")
+
+    def run():
+        pid = repo.resolve(ref)
+        project = repo.get_project(pid)
+        folder = repo.clean_repo_path(body.cwd or project["repo_path"])
+        if not folder:
+            raise HTTPException(409, "This project has no folder yet. Pick one.")
+        if not os.path.isdir(folder):
+            raise repo.Invalid(f"Folder not found: {folder}")
+        if body.save_folder and body.cwd and folder != project["repo_path"]:
+            repo.update_project(pid, {"repo_path": folder})
+        try:
+            started = tmux.new_session(folder, label=project["title"][:60], prompt=repo.opening_prompt(project))
+        except tmux.TmuxError as e:
+            raise repo.Invalid(str(e))
+        repo.mark_started(pid, started.get("claude_id"))
+        return started
+    return await _call(run)
+
+
+# The plugin's front end, served only when the plugin is on (and only to signed-in users).
+
+@router.get("/ui.js")
+async def ui_js():
+    return FileResponse(STATIC / "ideas.js", media_type="text/javascript")
+
+
+@router.get("/ui.css")
+async def ui_css():
+    return FileResponse(STATIC / "ideas.css", media_type="text/css")

@@ -53,4 +53,15 @@ def test_token_is_stable_and_long():
 
 
 def test_me_lists_plugin(client):
-    assert client.get("/api/me").json()["plugins"] == ["ideas"]
+    assert client.get("/api/me").json()["plugins"] == [{
+        "name": "ideas", "nav": {"label": "Ideas", "href": "#/ideas"},
+        "script": "/api/ideas/ui.js", "style": "/api/ideas/ui.css"}]
+
+
+def test_ui_files_need_sign_in(anon, client):
+    assert anon.get("/api/ideas/ui.js").status_code == 401
+    r = client.get("/api/ideas/ui.js")
+    assert r.status_code == 200 and "javascript" in r.headers["content-type"]
+    assert r.headers["cache-control"] == "no-cache"
+    assert "registerRoute" in r.text
+    assert client.get("/api/ideas/ui.css").headers["content-type"].startswith("text/css")

@@ -320,3 +320,37 @@ def add_note(pid: int, text: str, session_id: str | None = None) -> dict:
             c.rollback()
             raise
     return get_project(pid)
+
+
+# ---------- starting work ----------
+
+def opening_prompt(project: dict) -> str:
+    """First message for a session started from a project: what it is and what to do next."""
+    lines = [f'I\'d like to work on my project "{project["title"]}" (tracked in Hangar Ideas as `{project["slug"]}`).']
+    if project["summary"]:
+        lines += ["", f"Summary: {project['summary']}"]
+    m = project.get("next_milestone")
+    if m:
+        total = project["progress"]["total"]
+        lines += ["", f"Next milestone ({project['progress']['done'] + 1} of {total}): {m['title']}"]
+        if m["done_criteria"]:
+            lines.append(f"Done when: {m['done_criteria']}")
+        lines += ["", "Please start on this milestone. If you have the Hangar Ideas tools, mark it done once "
+                      "its done-when criterion is met."]
+    else:
+        lines += ["", "It has no open milestones. Help me decide the next step, and add it as a milestone if you "
+                      "have the Hangar Ideas tools."]
+    return "\n".join(lines)
+
+
+def mark_started(pid: int, session_id: str | None) -> dict:
+    """A session was started on a project: link it, move the next milestone to doing, and make the project active."""
+    project = get_project(pid)
+    m = project.get("next_milestone")
+    if m and m["status"] == "todo":
+        update_milestone(m["id"], {"status": "doing"}, session_id)
+    if project["status"] in ("idea", "planned", "paused"):
+        update_project(pid, {"status": "active"}, session_id)
+    elif session_id:
+        update_project(pid, {}, session_id)
+    return get_project(pid)
