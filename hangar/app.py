@@ -125,7 +125,7 @@ async def me(request: Request):
         return JSONResponse({"authed": False}, status_code=401)
     return {"authed": True, "version": __version__, "hostname": settings.hostname, "workspaces": settings.workspaces,
             "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None,
-            "plugins": [p.name for p in PLUGINS]}
+            "plugins": [p.public() for p in PLUGINS]}
 
 
 # ---------- sessions ----------

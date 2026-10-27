@@ -148,7 +148,8 @@ def claude_command(extra: list[str]) -> str:
 
 
 def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: bool = False,
-                model: str = "", permission_mode: str = "", shell_only: bool = False) -> dict:
+                model: str = "", permission_mode: str = "", shell_only: bool = False, prompt: str = "") -> dict:
+    """Start Claude (or a plain shell) in a new tmux session. `prompt` is sent as the opening message."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         raise TmuxError(f"Folder not found: {cwd}")
@@ -165,6 +166,8 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         extra += ["--model", model]
     if permission_mode:
         extra += ["--permission-mode", permission_mode]
+    if prompt:
+        extra += ["--", prompt]  # "--" so options that take several values can't swallow the prompt
 
     if shell_only:
         claude_id = ""

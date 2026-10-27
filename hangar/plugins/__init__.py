@@ -21,6 +21,13 @@ class Plugin:
     # Extra way to sign in, checked only for requests under /api/<name>/ (for example a bearer token).
     # Returning False falls back to the normal cookie and X-Hangar checks.
     authorize: Callable[[Request], bool] | None = None
+    nav: dict | None = None        # sidebar link, e.g. {"label": "Ideas", "href": "#/ideas"}
+    script: str | None = None      # front-end script the UI loads at startup
+    style: str | None = None       # and its stylesheet
+
+    def public(self) -> dict:
+        """What the web UI needs to know (sent in /api/me)."""
+        return {"name": self.name, "nav": self.nav, "script": self.script, "style": self.style}
 
     @property
     def prefix(self) -> str:
