@@ -12,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, auth, files, tmux
+from . import __version__, auth, files, plugins, tmux
 from .config import settings
 from .sessions import index, transcript
 from .store import all_meta, set_meta
@@ -24,6 +24,9 @@ PUBLIC_API = {"/api/login", "/api/me"}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    for plugin in PLUGINS:
+        if plugin.startup:
+            await asyncio.to_thread(plugin.startup)
     poller.start()
     await asyncio.to_thread(index.refresh, 0)
     await asyncio.to_thread(tmux.snapshot_for_restore)
@@ -54,6 +57,9 @@ def _resumable(claude_id: str) -> bool:
 
 
 app = FastAPI(title="Hangar", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
+PLUGINS = plugins.load(settings.plugins)
+for _plugin in PLUGINS:
+    app.include_router(_plugin.router)
 
 
 def _authed(request_or_ws) -> bool:
@@ -63,7 +69,7 @@ def _authed(request_or_ws) -> bool:
 @app.middleware("http")
 async def guard(request: Request, call_next):
     path = request.url.path
-    if path.startswith("/api/") and path not in PUBLIC_API:
+    if path.startswith("/api/") and path not in PUBLIC_API and not _plugin_authorized(request, path):
         if not _authed(request):
             return JSONResponse({"detail": "Sign in required"}, status_code=401)
         # Custom header blocks cross-site form posts (browsers can't add it without a CORS preflight).
@@ -75,6 +81,11 @@ async def guard(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+def _plugin_authorized(request: Request, path: str) -> bool:
+    """A plugin's own sign-in (e.g. a bearer token), valid only under that plugin's /api/<name>/ prefix."""
+    return any(p.authorize and path.startswith(p.prefix) and p.authorize(request) for p in PLUGINS)
 
 
 def _err(e: Exception, code: int = 400):
@@ -113,7 +124,8 @@ async def me(request: Request):
     if not _authed(request):
         return JSONResponse({"authed": False}, status_code=401)
     return {"authed": True, "version": __version__, "hostname": settings.hostname, "workspaces": settings.workspaces,
-            "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None}
+            "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None,
+            "plugins": [p.name for p in PLUGINS]}
 
 
 # ---------- sessions ----------
