@@ -238,7 +238,7 @@ def test_proxy_settings_are_ignored(env):
 
 def test_stdio_server_from_the_generated_config(env, tmp_path):
     """Start `python -m hangar.ideas.mcp` exactly as the MCP config says, from an unrelated folder."""
-    entry = json.loads(connect.config_path().read_text())["mcpServers"][connect.SERVER]
+    entry = json.loads(connect.mcp_config())["mcpServers"][connect.SERVER]
     environ = {"PATH": os.environ.get("PATH", ""), "HOME": str(tmp_path), **entry["env"],
                "HANGAR_URL": os.environ["HANGAR_URL"], "CLAUDE_CODE_SESSION_ID": SESSION}
     params = StdioServerParameters(command=entry["command"], args=entry["args"], env=environ, cwd=str(tmp_path))
@@ -256,22 +256,21 @@ def test_stdio_server_from_the_generated_config(env, tmp_path):
     assert repo.get_project(pid)["sessions"][0]["session_id"] == SESSION
 
 
-def test_config_file_has_no_token():
-    path = connect.config_path()
-    text = path.read_text()
+def test_mcp_config_has_no_token():
+    text = connect.mcp_config()
     assert token.get() not in text
     entry = json.loads(text)["mcpServers"]["hangar-ideas"]
     assert entry["command"] == sys.executable
     assert entry["args"] == ["-m", "hangar.ideas.mcp"]
     assert entry["env"]["HANGAR_IDEAS_TOKEN_FILE"] == str(token.path())
-    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert entry["env"]["PYTHONPATH"] == str(connect.ROOT)
 
 
 def test_sessions_get_the_server_and_its_permission():
     assert [p.name for p in plugins.active] == ["ideas"]
     argv = shlex.split(tmux.claude_command(["--session-id", SESSION]).split(";")[0])
     i = argv.index("--mcp-config")
-    assert argv[i + 1] == str(connect.config_path())
+    assert json.loads(argv[i + 1]) == json.loads(connect.mcp_config())
     assert argv[argv.index("--allowedTools") + 1] == "mcp__hangar-ideas__*"
     assert argv.index("--allowedTools") < argv.index("--session-id")  # flags first; nothing after them to swallow
 

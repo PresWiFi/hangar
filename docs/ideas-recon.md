@@ -134,6 +134,7 @@ tests/test_ideas_*.py
 - **Storage:** a separate SQLite file, `<data dir>/ideas.db`, with its own connection and lock. Tables keep the `ideas_` prefix, and the schema version is tracked in `ideas_schema_version`. Hangar's core `hangar.db` is untouched, and turning the plugin off leaves nothing behind in it.
 - **MCP library:** `mcp==2.3.0` pinned in `requirements.txt`.
 - **Switch:** `HANGAR_PLUGINS=ideas`. There is no separate `HANGAR_IDEAS` variable.
+- **Standing instruction (changed in Phase 3):** it ships as the MCP server's `instructions`, not through `--append-system-prompt`. It goes wherever the tools go, including Claude Code started outside Hangar. Nothing long is added to the session command line, and no `CLAUDE.md` snippet is needed. Claude Code loads server instructions at session start even when tool definitions are deferred, and cuts them at 4,096 characters.
 
 ## Proposed plugin seam
 
@@ -160,23 +161,21 @@ class Plugin:
 `claude_args()` for Ideas returns:
 
 ```
---mcp-config <data dir>/ideas-mcp.json
+--mcp-config '<json below>'
 --allowedTools mcp__hangar-ideas__*
---append-system-prompt <contents of prompt.md>
 ```
 
-- `ideas-mcp.json` (mode 0600, rewritten at startup):
-  `{"mcpServers": {"hangar-ideas": {"command": "<sys.executable>", "args": ["-m", "hangar.ideas.mcp"], "env": {"HANGAR_URL": "http://127.0.0.1:<port>", "HANGAR_IDEAS_TOKEN_FILE": "<data dir>/ideas-token"}}}}`.
-  `sys.executable` makes it work from a native venv as well as in Docker. The token stays out of the command line, so it doesn't show up in `ps` or tmux.
+- The MCP config, passed inline as JSON (Phase 3: a file path would stop Claude from starting wherever the file doesn't exist, such as host-tmux mode):
+  `{"mcpServers": {"hangar-ideas": {"command": "<sys.executable>", "args": ["-m", "hangar.ideas.mcp"], "env": {"HANGAR_URL": "http://127.0.0.1:<port>", "HANGAR_IDEAS_TOKEN_FILE": "<data dir>/ideas-token", "PYTHONPATH": "<repo root>"}}}}`.
+  `sys.executable` makes it work from a native venv as well as in Docker. The token stays in its file, so it doesn't show up in `ps` or tmux.
 - The shim reads `CLAUDE_CODE_SESSION_ID` from its environment and sends it with every call. Hangar doesn't need to pass any extra env var.
-- The inline `--append-system-prompt` combines with the image's `--append-system-prompt-file`. That combination is documented; passing two file flags is not.
 
 ## Known limits and edge cases
 
 - **`/clear` inside a session:** the MCP server keeps the session ID it started with, so after `/clear` new items link to the earlier conversation ID. It's acceptable for v1 and gets documented.
-- **`--fork-session`:** which ID the server gets isn't documented. Hangar itself records the parent ID for a fork until the 15 s tracker sees the new one. Test this in Phase 3.
-- **Resumed old conversations** keep their recorded system prompt. They get the tools, but not the standing instruction, so tool descriptions must carry the key rules too (search before create, done criteria).
+- **`--fork-session`:** which ID the server gets isn't documented. Hangar itself records the parent ID for a fork until the 15 s tracker sees the new one. Not tested in Phase 3. At worst a fork's changes link to the parent conversation.
+- **Resumed old conversations** keep their recorded system prompt, so they may get the tools without the standing instruction. The tool descriptions repeat the key rules (search before create, outcomes with "done when", discard means killed).
 - **`docker-compose.host-tmux.yml`:** sessions run on the host's tmux server, where the image's Python and data dir don't exist. The existing container note already has this problem. Ideas will be unsupported in that mode at first, and the docs will say so.
-- **`HANGAR_HOST` bound to one address:** the shim URL should use that address instead of `127.0.0.1` when the host isn't `0.0.0.0`.
+- **`HANGAR_HOST` bound to one address:** the shim URL uses that address. Only `0.0.0.0`, `::` and empty map to `127.0.0.1`.
 - **Variadic flags:** `--mcp-config` and `--allowedTools` take several values. If one is the last flag before a positional prompt (Phase 2's "start session with the next milestone" may pass one), it will swallow the prompt. Put plugin args before `extra`, and pass any opening prompt after `--`, or send it with `tmux.send_text` once Claude is ready.
 - `.dockerignore` excludes `docs/`, so these notes are not shipped in the image.

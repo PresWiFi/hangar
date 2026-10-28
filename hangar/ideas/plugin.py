@@ -6,9 +6,8 @@ from . import api, connect, db, token
 
 
 def _startup() -> None:
-    db.conn()            # create or upgrade ideas.db
-    token.get()          # create the MCP token on first start
-    connect.config_path()  # write the MCP config that sessions are started with
+    db.conn()    # create or upgrade ideas.db
+    token.get()  # create the MCP token on first start
 
 
 PLUGIN = Plugin(name="ideas", router=api.router, startup=_startup, authorize=token.authorize,

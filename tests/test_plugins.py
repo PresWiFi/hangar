@@ -42,7 +42,6 @@ def test_plugin_absent_when_not_enabled():
     assert result == {"routes": [], "me": [], "get": 404, "bearer": 401, "modules": [], "claude_args": False}
     assert not (data / "ideas.db").exists()
     assert not (data / "ideas-token").exists()
-    assert not (data / "ideas-mcp.json").exists()
 
 
 def test_unknown_and_bad_names_are_skipped(capsys):

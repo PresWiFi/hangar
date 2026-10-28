@@ -37,7 +37,8 @@
 .i-head-actions select { width: auto; }
 .i-connect pre { white-space: pre-wrap; word-break: break-all; background: var(--surface-2); padding: 10px;
   border-radius: 8px; font: 12.5px/1.5 var(--mono); user-select: all; max-height: 40vh; overflow: auto; }
-.i-connect p { line-height: 1.5; }
+.i-connect p { line-height: 1.5; margin: 0 0 10px; }
+.i-connect h2 { margin-bottom: 12px; }
 
 .i-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .i-grid > .card { grid-column: auto; }  /* Hangar's .card spans 12 columns by default */

@@ -1,14 +1,16 @@
 """How Claude sessions reach the Ideas MCP server.
 
-Hangar starts every Claude session with `--mcp-config <data dir>/ideas-mcp.json`. That file names the server
-(`python -m hangar.ideas.mcp`) and tells it where Hangar is and where the token file is. The token itself is
-never put in the file or on a command line.
+Hangar starts every Claude session with `--mcp-config '<json>'`, which names the server (`python -m hangar.ideas.mcp`)
+and tells it where Hangar is and where the token file is. The token itself is never put on a command line.
+
+The config is passed inline rather than as a file: Claude Code refuses to start if an --mcp-config file is
+missing (for example when sessions run in the host's tmux, outside the container), but only skips a server
+that fails to start.
 """
 from __future__ import annotations
 
 import ipaddress
 import json
-import os
 import shlex
 import sys
 from pathlib import Path
@@ -17,7 +19,6 @@ from ..config import settings
 from . import token
 
 SERVER = "hangar-ideas"   # MCP server name; Claude sees the tools as mcp__hangar-ideas__ideas_*
-CONFIG_FILE = "ideas-mcp.json"
 ROOT = Path(__file__).resolve().parents[2]  # folder that contains the hangar package
 
 
@@ -44,26 +45,14 @@ def server_entry(*, token_value: str | None = None) -> dict:
     return {"command": sys.executable, "args": ["-m", "hangar.ideas.mcp"], "env": env}
 
 
-def config_path() -> Path:
-    """Write the MCP config file if it's missing or out of date, and return its path."""
-    path = settings.data_dir / CONFIG_FILE
-    text = json.dumps({"mcpServers": {SERVER: server_entry()}}, indent=2) + "\n"
-    try:
-        current = path.read_text()
-    except OSError:
-        current = None
-    if current != text:
-        tmp = path.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(text)
-        os.replace(tmp, path)
-    return path
+def mcp_config() -> str:
+    """The --mcp-config value for Hangar's sessions (JSON, no token)."""
+    return json.dumps({"mcpServers": {SERVER: server_entry()}}, separators=(",", ":"))
 
 
 def claude_args() -> list[str]:
     """Arguments Hangar adds to every Claude session: the server, and permission to use its tools without asking."""
-    return ["--mcp-config", str(config_path()), "--allowedTools", f"mcp__{SERVER}__*"]
+    return ["--mcp-config", mcp_config(), "--allowedTools", f"mcp__{SERVER}__*"]
 
 
 def add_command(url: str | None = None) -> str:
