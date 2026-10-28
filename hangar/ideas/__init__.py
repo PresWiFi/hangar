@@ -1,14 +1,12 @@
-"""Ideas: a project tracker that Claude fills in from any Hangar session. Turn on with HANGAR_PLUGINS=ideas."""
-from __future__ import annotations
+"""Ideas: a project tracker that Claude fills in from any Hangar session. Turn on with HANGAR_PLUGINS=ideas.
 
-from ..plugins import Plugin
-from . import api, db, token
-
-
-def _startup() -> None:
-    db.conn()   # create or upgrade ideas.db
-    token.get()  # create the MCP token on first start
+The plugin itself lives in .plugin and is imported only when Hangar asks for PLUGIN. That keeps
+`python -m hangar.ideas.mcp` (the MCP server Claude starts) light: it doesn't load FastAPI or Hangar's settings.
+"""
 
 
-PLUGIN = Plugin(name="ideas", router=api.router, startup=_startup, authorize=token.authorize,
-                nav={"label": "Ideas", "href": "#/ideas"}, script="/api/ideas/ui.js", style="/api/ideas/ui.css")
+def __getattr__(name: str):
+    if name == "PLUGIN":
+        from .plugin import PLUGIN
+        return PLUGIN
+    raise AttributeError(name)

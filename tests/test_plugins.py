@@ -23,6 +23,7 @@ print(json.dumps({
     "get": c.get("/api/ideas/projects").status_code,
     "bearer": TestClient(app, headers={"Authorization": "Bearer x"}).get("/api/ideas/projects").status_code,
     "modules": sorted(m for m in __import__("sys").modules if m.startswith("hangar.ideas")),
+    "claude_args": "--mcp-config" in __import__("hangar.tmux").tmux.claude_command([]),
 }))
 """
 
@@ -38,9 +39,10 @@ def _run_off(plugins_value: str) -> tuple[dict, Path]:
 
 def test_plugin_absent_when_not_enabled():
     result, data = _run_off("")
-    assert result == {"routes": [], "me": [], "get": 404, "bearer": 401, "modules": []}
+    assert result == {"routes": [], "me": [], "get": 404, "bearer": 401, "modules": [], "claude_args": False}
     assert not (data / "ideas.db").exists()
     assert not (data / "ideas-token").exists()
+    assert not (data / "ideas-mcp.json").exists()
 
 
 def test_unknown_and_bad_names_are_skipped(capsys):

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from .. import auth, tmux
-from . import repo, token
+from . import connect, repo, token
 
 router = APIRouter(prefix="/api/ideas")
 STATIC = Path(__file__).with_name("static")
@@ -199,6 +199,14 @@ async def start_session(ref: str, body: StartIn, request: Request):
         repo.mark_started(pid, started.get("claude_id"))
         return started
     return await _call(run)
+
+
+@router.get("/connect")
+async def connect_info(request: Request):
+    """The `claude mcp add` command for Claude Code started outside Hangar. Web UI only: it contains the token."""
+    if not auth.check_token(request.cookies.get(auth.COOKIE)):
+        raise HTTPException(403, "Needs the web UI sign-in")
+    return {"command": await asyncio.to_thread(connect.add_command), "server": connect.SERVER}
 
 
 # The plugin's front end, served only when the plugin is on (and only to signed-in users).

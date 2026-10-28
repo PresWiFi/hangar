@@ -71,7 +71,8 @@
       if (!el) return;
       const head = `<div class="page-head"><div><h1>Ideas</h1>
           <div class="muted">${projects ? `${projects.length} project${projects.length === 1 ? "" : "s"}` : "Loading…"}</div></div>
-        <button class="btn primary" id="i-new">+ New idea</button></div>`;
+        <div class="i-head-actions"><button class="btn" id="i-connect">Connect Claude Code</button>
+        <button class="btn primary" id="i-new">+ New idea</button></div></div>`;
       if (!el.dataset.ready) {
         el.innerHTML = `${head}<div class="i-filters">
             <input type="search" id="i-q" placeholder="Search ideas" aria-label="Search ideas" autocomplete="off" value="${esc(ui.q)}">
@@ -79,6 +80,7 @@
           <div id="i-body"></div>`;
         el.dataset.ready = "1";
         $("#i-new").addEventListener("click", newIdeaDialog);
+        $("#i-connect").addEventListener("click", connectDialog);
         $("#i-q").addEventListener("input", (e) => {
           ui.q = e.target.value.trim();
           clearTimeout(render._t);
@@ -88,6 +90,7 @@
       } else {
         el.querySelector(".page-head").outerHTML = head;
         $("#i-new").addEventListener("click", newIdeaDialog);
+        $("#i-connect").addEventListener("click", connectDialog);
       }
 
       const tags = [...new Set((projects || []).flatMap((p) => p.tags))].sort((a, b) => a.localeCompare(b));
@@ -159,6 +162,27 @@
         dlg.close();
         location.hash = `#/ideas/p/${r.project.id}`;
       } catch (err) { $("#in-err").textContent = err.message; }
+    });
+  }
+
+  async function connectDialog() {
+    const dlg = $("#dialog");
+    let info;
+    try { info = await api(`${BASE}/connect`); } catch (e) { toast(e.message); return; }
+    dlg.innerHTML = `<form method="dialog" class="i-connect">
+      <h2>Connect Claude Code</h2>
+      <p>Sessions started in Hangar are already connected: Claude can file ideas and mark milestones done.</p>
+      <p>To use Ideas from Claude Code started outside Hangar on this machine, run this once in a terminal:</p>
+      <pre id="ic-cmd">${esc(info.command)}</pre>
+      <p class="muted">The command contains your Ideas token, so treat it like a password. The token only works for
+      Ideas, not the rest of Hangar.</p>
+      <div class="dialog-actions"><button type="button" class="btn" id="ic-copy">Copy command</button>
+        <button class="btn primary" type="submit">Done</button></div>
+    </form>`;
+    dlg.showModal();
+    $("#ic-copy").addEventListener("click", async () => {
+      try { await navigator.clipboard.writeText(info.command); toast("Copied"); }
+      catch { getSelection().selectAllChildren($("#ic-cmd")); toast("Press Ctrl+C to copy"); }
     });
   }
 

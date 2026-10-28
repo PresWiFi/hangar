@@ -35,6 +35,9 @@
 .i-tags { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin-top: 8px; }
 .i-head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .i-head-actions select { width: auto; }
+.i-connect pre { white-space: pre-wrap; word-break: break-all; background: var(--surface-2); padding: 10px;
+  border-radius: 8px; font: 12.5px/1.5 var(--mono); user-select: all; max-height: 40vh; overflow: auto; }
+.i-connect p { line-height: 1.5; }
 
 .i-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
 .i-grid > .card { grid-column: auto; }  /* Hangar's .card spans 12 columns by default */

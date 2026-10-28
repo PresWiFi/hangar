@@ -58,6 +58,7 @@ def _resumable(claude_id: str) -> bool:
 
 app = FastAPI(title="Hangar", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
 PLUGINS = plugins.load(settings.plugins)
+plugins.active[:] = PLUGINS
 for _plugin in PLUGINS:
     app.include_router(_plugin.router)
 

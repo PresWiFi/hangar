@@ -24,6 +24,8 @@ class Plugin:
     nav: dict | None = None        # sidebar link, e.g. {"label": "Ideas", "href": "#/ideas"}
     script: str | None = None      # front-end script the UI loads at startup
     style: str | None = None       # and its stylesheet
+    # Extra arguments for every Claude session Hangar starts (for example --mcp-config).
+    claude_args: Callable[[], list[str]] | None = None
 
     def public(self) -> dict:
         """What the web UI needs to know (sent in /api/me)."""
@@ -32,6 +34,14 @@ class Plugin:
     @property
     def prefix(self) -> str:
         return f"/api/{self.name}/"
+
+
+active: list[Plugin] = []  # the plugins Hangar is running with (set by app.py)
+
+
+def claude_args() -> list[str]:
+    """Arguments the loaded plugins add to every Claude session. Empty when no plugin is on."""
+    return [a for p in active if p.claude_args for a in p.claude_args()]
 
 
 def load(names: list[str]) -> list[Plugin]:

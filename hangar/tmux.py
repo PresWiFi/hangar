@@ -11,6 +11,7 @@ from pathlib import Path
 
 import psutil
 
+from . import plugins
 from .config import settings
 from .sessions import live_claude_processes
 from .store import kv_get, kv_set
@@ -141,7 +142,7 @@ def dismiss_restore() -> None:
 
 def claude_command(extra: list[str]) -> str:
     """Shell command that runs Claude and then leaves a shell behind, so the session stays usable."""
-    args = shlex.split(settings.claude_base_args) + shlex.split(settings.claude_args) + extra
+    args = shlex.split(settings.claude_base_args) + plugins.claude_args() + shlex.split(settings.claude_args) + extra
     claude = " ".join([shlex.quote(settings.claude_cmd)] + [shlex.quote(a) for a in args])
     note = "Claude exited. This is a shell in the same folder. Type exit to close the session."
     return f"{claude}; printf '\\n\\033[2m%s\\033[0m\\n' {shlex.quote(note)}; exec \"${{SHELL:-/bin/bash}}\" -l"
