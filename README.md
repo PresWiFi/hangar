@@ -133,6 +133,7 @@ Sessions on Ollama are tagged *Ollama*. Hangar remembers which server and model 
 ## How sessions work
 
 - **New session** opens a folder picker (limited to `WORKSPACE`). For Claude it starts `claude --session-id <uuid>` inside a new tmux session, and Hangar uses that ID to link the terminal to the conversation log.
+- **Copying from the terminal:** drag over text and it's copied to the device you're on (tmux selects it and Hangar passes it to your clipboard). To use the browser's own selection instead, hold Shift while dragging, then press Ctrl+Shift+C (Cmd+C on a Mac). Programs that copy through the terminal, like Claude Code's `/copy`, work too. Hangar never lets the remote side read your clipboard.
 - When the agent exits, the tmux session drops to a shell in the same folder, so nothing disappears unexpectedly. **Stop** closes the tmux session.
 - Claude Code stores conversations in `~/.claude/projects/<folder-path>/<id>.jsonl`. Hangar reads those files incrementally and never changes them.
 - Codex runs with `--no-daemon`, so each tmux session owns its Codex process. Codex can't be given an ID up front, so Hangar links the terminal to the conversation once the Codex process opens its log in `~/.codex/sessions/`. Codex compresses logs older than a week; Hangar reads those too (with `zstd`, which is in the image).

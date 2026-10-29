@@ -34,12 +34,47 @@ async function api(path, opts = {}) {
   return data;
 }
 
-function toast(msg, ms = 2600) {
+function toast(msg, ms = 2600, action = null) {
   const t = $("#toast");
   t.textContent = msg;
+  if (action) {
+    const b = document.createElement("button");
+    b.className = "btn small";
+    b.textContent = action.label;
+    b.addEventListener("click", () => { t.hidden = true; action.run(); });
+    t.append(" ", b);
+  }
   t.hidden = false;
   clearTimeout(toast._t);
   toast._t = setTimeout(() => (t.hidden = true), ms);
+}
+
+/* Copies text to the clipboard. The Clipboard API only exists on HTTPS and localhost, so on a plain
+   http:// LAN address this falls back to the older copy command, which needs a recent click or key press.
+   Returns true if it worked. */
+async function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard?.writeText) {
+    try { await navigator.clipboard.writeText(text); return true; } catch { /* try the fallback */ }
+  }
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.cssText = "position:fixed;top:0;left:0;width:1px;height:1px;opacity:0";
+  const active = document.activeElement;
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch { ok = false; }
+  ta.remove();
+  active?.focus?.({ preventScroll: true });
+  return ok;
+}
+
+/* Copy with feedback. If the browser refuses (no recent click), offer a button, which counts as one. */
+async function copyWithToast(text, what = "Copied") {
+  if (await copyText(text)) { toast(what); return true; }
+  toast("Couldn't copy automatically.", 8000, { label: "Copy", run: () => copyWithToast(text, what) });
+  return false;
 }
 
 /* Uploads one file as the raw request body (XHR for progress). Resolves to {path, name, size}. */
@@ -617,7 +652,7 @@ function providerCards(root) {
       }
       else if (what === "codex-cancel") { await api("/api/providers/codex/cancel", { method: "POST" }); data.codex.login = null; ui.codexUrl = ""; }
       else if (what === "codex-logout") { data.codex = await api("/api/providers/codex/logout", { method: "POST" }); }
-      else if (what === "codex-copy") { try { await navigator.clipboard.writeText($("#codex-code", root).textContent); toast("Code copied"); } catch { /* select it instead */ } return; }
+      else if (what === "codex-copy") { await copyWithToast($("#codex-code", root).textContent, "Code copied"); return; }
       else if (what === "ollama-remove") { await api(`/api/providers/ollama/${el.dataset.id}`, { method: "DELETE" }); data.ollama = await api("/api/providers/ollama"); }
       else if (what === "ollama-add-found") {
         await api("/api/providers/ollama", { method: "POST", body: { url: el.dataset.url } });
@@ -657,6 +692,12 @@ function providerCards(root) {
       }
       render();
     } catch (ex) {
+      if (what === "claude-code") {
+        // The attempt is over; go back to a fresh "Sign in with Claude" and keep the reason on screen.
+        data.claude.login = null;
+        ui.claudeCode = "";
+        render();
+      }
       showErr(what.split("-")[0] + "-error", ex);
     }
   }
@@ -664,6 +705,11 @@ function providerCards(root) {
   root.addEventListener("click", (e) => {
     const b = e.target.closest("[data-pa]");
     if (b) { e.preventDefault(); act(b.dataset.pa, b); }
+  });
+  // The cards re-render while Codex installs or signs in; keep whatever was typed in the meantime.
+  root.addEventListener("input", (e) => {
+    const map = { "claude-code": "claudeCode", "codex-url": "codexUrl", "ollama-url": "ollamaUrl", "ollama-name": "ollamaName" };
+    if (map[e.target.id]) ui[map[e.target.id]] = e.target.value;
   });
   root.addEventListener("submit", (e) => {
     const f = e.target.closest("[data-pf]");
@@ -725,7 +771,7 @@ async function ssoCard(root) {
     $("#sso-label", root).placeholder = p.label;
   });
   $("#sso-copy", root).addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText($("#sso-redirect", root).value); toast("Copied"); } catch { $("#sso-redirect", root).select(); }
+    await copyWithToast($("#sso-redirect", root).value);
   });
   $("#sso-form", root).addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1076,7 +1122,7 @@ function sessionView({ id, tmuxName }) {
     $("#copy")?.addEventListener("click", async () => {
       const cmd = s.agent === "codex" ? `cd ${JSON.stringify(s.cwd || ".")} && codex resume ${s.id}`
         : `cd ${JSON.stringify(s.cwd || ".")} && claude --resume ${s.id}`;
-      try { await navigator.clipboard.writeText(cmd); toast("Copied"); } catch { prompt("Copy this command:", cmd); }
+      if (!(await copyText(cmd))) prompt("Copy this command:", cmd); else toast("Copied");
     });
     $("#kill")?.addEventListener("click", async () => {
       if (!confirm(`Stop this tmux session? ${agentName(s)} will exit, but you can resume the conversation later.`)) return;
@@ -1354,6 +1400,28 @@ class TermClient {
     this.term.loadAddon(new WebLinksAddon.WebLinksAddon());
     this.term.open(el);
     this.enc = new TextEncoder();
+    // Copying out of the terminal. Dragging selects inside tmux (mouse mode), and tmux sends the selection as an
+    // OSC 52 sequence; programs like Claude Code's /copy do the same. Put it on this device's clipboard.
+    this.term.parser.registerOscHandler(52, (data) => {
+      const b64 = data.slice(data.indexOf(";") + 1);
+      if (!b64 || b64 === "?") return true;  // a read request; never hand the clipboard to the remote side
+      try {
+        const text = new TextDecoder().decode(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)));
+        if (text) copyWithToast(text, `Copied ${text.length} character${text.length === 1 ? "" : "s"}`);
+      } catch { /* not base64 */ }
+      return true;
+    });
+    // Shift+drag selects in the browser instead of tmux; Ctrl+Shift+C (or Cmd+C) copies that selection.
+    this.term.attachCustomKeyEventHandler((e) => {
+      const combo = e.type === "keydown" && e.key.toLowerCase() === "c" &&
+        ((e.ctrlKey && e.shiftKey) || (e.metaKey && !e.ctrlKey));
+      if (combo && this.term.hasSelection()) {
+        copyWithToast(this.term.getSelection(), "Copied");
+        e.preventDefault();
+        return false;
+      }
+      return true;
+    });
     this.term.onData((d) => this.send(d));
     this.term.onBinary((d) => this.sendBytes(Uint8Array.from(d, (c) => c.charCodeAt(0))));
     this.term.onResize(({ cols, rows }) => this.ctl({ type: "resize", cols, rows }));

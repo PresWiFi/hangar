@@ -83,12 +83,22 @@ def submit_code(code: str) -> dict:
         output = _flow.text
         _cache = None
         st = status(fresh=True)
+        cancel_login()  # finished or failed, this attempt's link can't be used again
         if st["linked"]:
-            cancel_login()
             return status()
-        if not _flow.done:
-            cancel_login()
-        raise RuntimeError(f"Sign-in didn't finish. {_tail(output)}".strip())
+        raise RuntimeError(explain(output))
+
+
+def explain(output: str) -> str:
+    """Turns the CLI's last words into something a person can act on."""
+    tail = _tail(output)
+    if re.search(r"status code 4\d\d|invalid[_ ]grant|invalid code", output, re.I):
+        return ("Claude didn't accept that code. A code works once, only with the sign-in link from the same "
+                "attempt, and only for a few minutes. Click Sign in with Claude and use the new link. "
+                f"(Claude Code said: {tail})")
+    if re.search(r"status code 5\d\d|ECONNRESET|ETIMEDOUT|ENOTFOUND|network", output, re.I):
+        return f"Couldn't reach Claude to finish signing in. Check this machine's internet access. ({tail})"
+    return f"Sign-in didn't finish. Claude Code said: {tail or 'nothing'}"
 
 
 def cancel_login() -> None:

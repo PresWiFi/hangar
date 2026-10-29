@@ -68,6 +68,21 @@ def test_claude_wrong_code(fake_claude, client):
     assert "Invalid code" in r.json()["detail"]
 
 
+def test_claude_failure_clears_attempt(fake_claude, client):
+    client.post("/api/providers/claude/login")
+    client.post("/api/providers/claude/code", json={"code": "BAD"})
+    assert client.get("/api/providers").json()["claude"]["login"] is None  # back to "Sign in with Claude"
+
+
+@pytest.mark.parametrize("output,expect", [
+    ("Paste code here if prompted > Login failed: Request failed with status code 400", "didn't accept that code"),
+    ("Login failed: getaddrinfo ENOTFOUND api.anthropic.com", "Couldn't reach Claude"),
+    ("something odd", "Sign-in didn't finish. Claude Code said: something odd"),
+])
+def test_claude_errors_explained(output, expect):
+    assert expect in claude.explain(output)
+
+
 def test_claude_code_without_flow(fake_claude, client):
     assert client.post("/api/providers/claude/code", json={"code": "GOOD-CODE"}).status_code == 409
 
