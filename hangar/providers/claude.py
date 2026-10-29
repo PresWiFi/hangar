@@ -6,6 +6,7 @@ back here; Hangar types it into the waiting CLI.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import threading
@@ -61,8 +62,26 @@ def status(fresh: bool = False) -> dict:
         except (subprocess.TimeoutExpired, ValueError) as e:
             out["status_output"] = f"claude auth status failed: {e}"
         _cache = (time.time(), dict(out))
+    problem = folder_problem()
+    if problem:
+        out["error"] = problem
     out["login"] = _flow_state()
     return out
+
+
+def folder_problem() -> str | None:
+    """Claude Code can't save a login into a folder it can't write (it still says "Login successful")."""
+    d = settings.claude_dir
+    target = d if d.exists() else d.parent
+    if os.access(target, os.W_OK):
+        return None
+    try:
+        owner = target.owner()
+    except (KeyError, OSError):
+        owner = "another user"
+    return (f"Hangar can't write to {target} (it belongs to {owner}), so Claude can't save a sign-in there. "
+            f"Fix it with: docker exec -u root <container> chown {os.getuid()}:{os.getgid()} {target}  "
+            "(restarting the container also fixes it if sudo is allowed).")
 
 
 def _flow_state() -> dict | None:
@@ -74,6 +93,9 @@ def _flow_state() -> dict | None:
 def start_login() -> dict:
     """Starts `claude auth login` and returns the sign-in link."""
     global _flow, _flow_url
+    problem = folder_problem()
+    if problem:
+        raise RuntimeError(problem)
     with _lock:
         cancel_login()
         _flow = PtyRun([settings.claude_cmd, "auth", "login", "--claudeai"], _env(), cwd=str(settings.data_dir))

@@ -103,6 +103,22 @@ def test_claude_success_but_no_login_found(claude_says_ok, client):
     assert str(claude_says_ok) in r.json()["detail"]
 
 
+def test_claude_unwritable_folder_blocks_sign_in(fake_claude, client, tmp_path, monkeypatch):
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    monkeypatch.setattr(settings, "claude_dir", locked)
+    claude._cache = None
+    try:
+        st = client.get("/api/providers").json()["claude"]
+        assert "can't write to" in st["error"] and "chown" in st["error"]
+        r = client.post("/api/providers/claude/login")
+        assert r.status_code == 409 and "can't write to" in r.json()["detail"]
+    finally:
+        locked.chmod(0o755)
+        claude._cache = None
+
+
 def test_claude_failure_clears_attempt(fake_claude, client):
     client.post("/api/providers/claude/login")
     client.post("/api/providers/claude/code", json={"code": "BAD"})

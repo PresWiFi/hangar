@@ -1,7 +1,19 @@
 #!/bin/bash
 # Prepares the container user's home (a volume, so it survives restarts) and starts Hangar.
 set -e
-mkdir -p "$HOME/.claude"
+mkdir -p "$HOME/.claude" "$HOME/.codex"
+
+# A Docker volume mounted on a folder the image doesn't have starts out owned by root, and then Claude Code
+# can't save its login there (it still prints "Login successful"). Fix the owner if we can.
+for dir in "$HOME/.claude" "$HOME/.codex"; do
+  if [ ! -w "$dir" ]; then
+    if sudo -n chown "$(id -u):$(id -g)" "$dir" 2>/dev/null; then
+      echo "Fixed the owner of $dir (it belonged to $(stat -c %U "$dir" 2>/dev/null || echo someone else) before)."
+    else
+      echo "WARNING: $dir isn't writable by $(id -un). Run: docker exec -u root <container> chown $(id -u):$(id -g) $dir"
+    fi
+  fi
+done
 
 # Claude Code keeps onboarding state and folder trust in ~/.claude.json, which lives outside the
 # shared ~/.claude folder. Seed it from Claude's own newest backup so sessions don't start with
