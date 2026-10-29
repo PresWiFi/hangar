@@ -54,7 +54,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY hangar ./hangar
 COPY docker/entrypoint.sh /usr/local/bin/hangar-entrypoint
-RUN chmod +x /usr/local/bin/hangar-entrypoint
+# A Windows checkout can turn line endings into CRLF, which breaks the scripts. Strip any stray CRs.
+RUN sed -i 's/\r$//' /usr/local/bin/hangar-entrypoint /etc/apt/apt.conf.d/99hangar-remember \
+      /etc/hangar/container-prompt.md /app/hangar/tmux.conf \
+ && chmod +x /usr/local/bin/hangar-entrypoint
 
 USER hangar
 EXPOSE 7878

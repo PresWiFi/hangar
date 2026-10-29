@@ -1,0 +1,5 @@
+# Keep Linux line endings everywhere, also in Windows checkouts. Scripts with CRLF break inside the
+# container ("hangar-entrypoint: no such file or directory").
+* text=auto eol=lf
+*.png binary
+*.ico binary
