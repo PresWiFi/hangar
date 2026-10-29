@@ -746,10 +746,13 @@ async function ssoCard(root) {
         <label class="field"><span>Client secret ${c.has_secret ? "<small>(saved; leave empty to keep)</small>" : ""}</span>
           <input type="password" id="sso-secret" autocomplete="new-password" spellcheck="false"></label>
       </div>
-      <div class="field"><span>Redirect URI <small>(add this at the provider)</small></span>
-        <div class="inline-form"><input type="text" id="sso-redirect" readonly value="${esc(redirect)}">
+      <div class="field"><span>Redirect URI <small>(add exactly this at the provider)</small></span>
+        <div class="inline-form"><input type="text" id="sso-redirect" spellcheck="false" value="${esc(redirect)}"${c.public_url ? " readonly" : ""}>
           <button class="btn" type="button" id="sso-copy">Copy</button></div>
-        ${c.redirect_uri && c.redirect_uri !== c.suggested_redirect_uri ? `<p class="hint">You're on a different address now (${esc(c.suggested_redirect_uri)}). Save again to use it.</p>` : ""}
+        <p class="hint">${c.public_url ? "Set by HANGAR_PUBLIC_URL."
+          : "Use the address you open Hangar at from your other devices, for example https://hangar.your-tailnet.ts.net/api/auth/oidc/callback. Edit it if it shows localhost."}</p>
+        <p class="hint warn" id="sso-local"${/^https?:\/\/(localhost|127\.0\.0\.1)([:/]|$)/.test(redirect) ? "" : " hidden"}>This is a localhost address, so signing in will only work on this computer.</p>
+        ${c.redirect_uri && !c.redirect_uri.startsWith(c.current_origin + "/") ? `<p class="hint">You're on ${esc(c.current_origin)} right now. Linking has to be done from ${esc(new URL(c.redirect_uri).origin)}; signing in works from either.</p>` : ""}
       </div>
       <div class="form-actions"><button class="btn${c.configured ? "" : " primary"}" type="submit">Save</button>
         ${c.configured ? `<a class="btn primary" href="/api/oidc/link">${linked ? "Link again" : `Link with ${esc(c.label)}`}</a>` : ""}
@@ -770,6 +773,9 @@ async function ssoCard(root) {
     $("#sso-issuer", root).placeholder = p.issuer;
     $("#sso-label", root).placeholder = p.label;
   });
+  $("#sso-redirect", root).addEventListener("input", (e) => {
+    $("#sso-local", root).hidden = !/^(https?:\/\/)?(localhost|127\.0\.0\.1)([:/]|$)/.test(e.target.value.trim());
+  });
   $("#sso-copy", root).addEventListener("click", async () => {
     await copyWithToast($("#sso-redirect", root).value);
   });
@@ -779,7 +785,7 @@ async function ssoCard(root) {
     try {
       await api("/api/oidc", { method: "PUT", body: { preset: $("#sso-preset", root).value, issuer: $("#sso-issuer", root).value,
         client_id: $("#sso-client", root).value, client_secret: $("#sso-secret", root).value || null,
-        redirect_uri: c.suggested_redirect_uri, label: $("#sso-label", root).value } });
+        redirect_uri: $("#sso-redirect", root).value, label: $("#sso-label", root).value } });
       toast("Saved. Now link your identity.");
       ssoCard(root);
     } catch (ex) { $("#sso-error", root).textContent = ex.message; }

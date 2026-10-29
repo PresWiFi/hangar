@@ -114,7 +114,7 @@ Hangar can use an OpenID Connect provider for sign-in: Authentik, Microsoft Entr
 
 The sign-in page then shows **Sign in with …** next to the password form. Once that works, you can turn password sign-in off in Settings. If you lose access to the provider, `docker exec -it hangar python -m hangar reset-password` sets a new password and turns password sign-in back on.
 
-The redirect URI is the address you open Hangar at. If you use more than one (LAN and Tailscale), pick the one you'll use for SSO and save from there; behind HTTPS (the Tailscale sidecar or a reverse proxy), set `HANGAR_SECURE_COOKIES=true`.
+The redirect URI is filled in from the address in your browser, and you can edit it. If it shows `localhost`, change it to the address your other devices use, for example `http://192.168.1.10:7878` or `https://hangar.your-tailnet.ts.net`; or set `HANGAR_PUBLIC_URL` in `.env` so Hangar always uses that address. Behind a reverse proxy, Hangar reads `X-Forwarded-Host` and `X-Forwarded-Proto`. Linking has to be done from the redirect address; **Sign in with …** works from any address and moves you there first. Behind HTTPS (the Tailscale sidecar or a reverse proxy), also set `HANGAR_SECURE_COOKIES=true`.
 
 ## Agents and models
 
@@ -183,6 +183,7 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 | `HANGAR_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
 | `HANGAR_MAX_UPLOAD_MB` | `512` | Largest file you can upload from the browser. |
 | `HANGAR_SECURE_COOKIES` | `false` | Mark the login cookie HTTPS-only. |
+| `HANGAR_PUBLIC_URL` | browser address | The address people open Hangar at, used for the SSO redirect URI. |
 | `HANGAR_HOSTNAME` | system hostname | Name shown in the UI. |
 
 ## Security

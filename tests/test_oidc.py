@@ -291,3 +291,43 @@ def test_reset_password_reenables_password_login(client, idp):
         assert oidc.password_login_enabled()
     finally:
         store.kv_set("owner", owner)
+
+
+# ---------- redirect address ----------
+
+def test_suggested_redirect_uses_forwarded_host(client, idp):
+    r = client.get("/api/oidc", headers={"X-Forwarded-Host": "hangar.tail1234.ts.net", "X-Forwarded-Proto": "https"})
+    assert r.json()["suggested_redirect_uri"] == "https://hangar.tail1234.ts.net/api/auth/oidc/callback"
+
+
+def test_public_url_wins(client, idp, monkeypatch):
+    from hangar.config import settings
+    monkeypatch.setattr(settings, "public_url", "https://hangar.example.com")
+    j = client.get("/api/oidc", headers={"X-Forwarded-Host": "other"}).json()
+    assert j["suggested_redirect_uri"] == "https://hangar.example.com/api/auth/oidc/callback" and j["public_url"]
+
+
+@pytest.mark.parametrize("given,saved", [
+    ("http://10.10.0.5:7878/api/auth/oidc/callback", "http://10.10.0.5:7878/api/auth/oidc/callback"),
+    ("https://hangar.example.com", "https://hangar.example.com/api/auth/oidc/callback"),
+    ("hangar.lan:7878", "http://hangar.lan:7878/api/auth/oidc/callback"),
+])
+def test_redirect_uri_can_be_entered(client, idp, given, saved):
+    r = client.put("/api/oidc", json={"issuer": ISS, "client_id": CLIENT, "redirect_uri": given})
+    assert r.status_code == 200 and oidc.config()["redirect_uri"] == saved
+
+
+@pytest.mark.parametrize("bad", ["ftp://x/api/auth/oidc/callback", "https://x/elsewhere", "https://x/api/auth/oidc/callback?a=1"])
+def test_redirect_uri_rejects_bad(client, idp, bad):
+    assert client.put("/api/oidc", json={"issuer": ISS, "client_id": CLIENT, "redirect_uri": bad}).status_code == 400
+
+
+def test_start_moves_to_registered_address_once(client, idp):
+    link(client, idp)
+    client.put("/api/oidc", json={"preset": "authentik", "issuer": ISS, "client_id": CLIENT,
+                                  "redirect_uri": "https://hangar.example.com/api/auth/oidc/callback"})
+    browser = TestClient(app)  # arrives as http://testserver
+    r = browser.get("/api/auth/oidc/start", follow_redirects=False)
+    assert r.headers["location"] == "https://hangar.example.com/api/auth/oidc/start?here=1"
+    r = browser.get("/api/auth/oidc/start?here=1", follow_redirects=False)  # proxy hid the address: no loop
+    assert r.headers["location"].startswith(f"{ISS}/authorize?")
