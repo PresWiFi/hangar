@@ -1,7 +1,19 @@
 #!/bin/bash
 # Prepares the container user's home (a volume, so it survives restarts) and starts Hangar.
 set -e
-mkdir -p "$HOME/.claude"
+mkdir -p "$HOME/.claude" "$HOME/.codex"
+
+# A Docker volume mounted on a folder the image doesn't have starts out owned by root, and then Claude Code
+# can't save its login there (it still prints "Login successful"). Fix the owner if we can.
+for dir in "$HOME/.claude" "$HOME/.codex"; do
+  if [ ! -w "$dir" ]; then
+    if sudo -n chown "$(id -u):$(id -g)" "$dir" 2>/dev/null; then
+      echo "Fixed the owner of $dir (it belonged to $(stat -c %U "$dir" 2>/dev/null || echo someone else) before)."
+    else
+      echo "WARNING: $dir isn't writable by $(id -un). Run: docker exec -u root <container> chown $(id -u):$(id -g) $dir"
+    fi
+  fi
+done
 
 # Claude Code keeps onboarding state and folder trust in ~/.claude.json, which lives outside the
 # shared ~/.claude folder. Seed it from Claude's own newest backup so sessions don't start with
@@ -27,12 +39,20 @@ if not current.get("hasCompletedOnboarding") or not current.get("projects"):
             seed = data
             print(f"Seeded ~/.claude.json from {b}")
             break
-    merged = {**current, **seed}
-    merged["hasCompletedOnboarding"] = True
-    merged.setdefault("theme", "dark")
-    with open(path, "w") as f:
-        json.dump(merged, f, indent=2)
-    os.chmod(path, 0o600)
+    current = {**current, **seed}
+    current["hasCompletedOnboarding"] = True
+    current.setdefault("theme", "dark")
+
+# Trust the workspace folders the owner configured (this covers their subfolders too). Otherwise a fresh
+# login asks "Do you trust this folder?" on the first session, and its default answer exits Claude.
+projects = current.setdefault("projects", {})
+for ws in os.environ.get("HANGAR_WORKSPACES", "").replace(";", ",").split(","):
+    ws = ws.strip().rstrip("/")
+    if ws:
+        projects.setdefault(ws, {})["hasTrustDialogAccepted"] = True
+with open(path, "w") as f:
+    json.dump(current, f, indent=2)
+os.chmod(path, 0o600)
 PY
 
 # Mounted repos can be owned by a different uid than the container user; let git use them.

@@ -35,6 +35,7 @@ RUN mkdir -p /tmp/ci \
 RUN groupadd -g ${GID} hangar 2>/dev/null || true \
  && useradd -m -u ${UID} -g ${GID} -s /bin/bash hangar \
  && mkdir -p /data /etc/hangar && chown ${UID}:${GID} /data \
+ && install -d -o ${UID} -g ${GID} /home/hangar/.claude /home/hangar/.codex \
  && apt-mark showmanual > /etc/hangar/base-packages.txt \
  && if [ "$ALLOW_SUDO" = "true" ]; then \
       echo 'hangar ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/hangar && chmod 440 /etc/sudoers.d/hangar; \

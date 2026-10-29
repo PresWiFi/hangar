@@ -24,6 +24,7 @@ class Settings:
     port: int = 7878
     data_dir: Path = Path.home() / ".local" / "share" / "hangar"
     claude_dir: Path = Path.home() / ".claude"
+    codex_home: Path = Path.home() / ".codex"   # Codex CLI's login, config, and session logs
     # Folders new sessions may start in. The first one is the default.
     workspaces: list[str] = field(default_factory=list)
     password: str = ""
@@ -46,6 +47,7 @@ class Settings:
         s.port = int(e.get("HANGAR_PORT", s.port))
         s.data_dir = Path(e.get("HANGAR_DATA_DIR") or s.data_dir).expanduser()
         s.claude_dir = Path(e.get("CLAUDE_CONFIG_DIR") or s.claude_dir).expanduser()
+        s.codex_home = Path(e.get("CODEX_HOME") or s.codex_home).expanduser()
         s.workspaces = _list(e.get("HANGAR_WORKSPACES", "")) or [str(Path.home())]
         s.password = e.get("HANGAR_PASSWORD", "")
         s.tmux_socket = e.get("HANGAR_TMUX_SOCKET", "")

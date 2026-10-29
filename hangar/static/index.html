@@ -10,21 +10,48 @@
   <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/static/icon-192.png">
   <link rel="stylesheet" href="/static/vendor/xterm.css">
-  <link rel="stylesheet" href="/static/app.css?v=1">
+  <link rel="stylesheet" href="/static/app.css?v=7">
   <script>
     try { const t = localStorage.getItem("hangar.theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
   </script>
 </head>
 <body>
   <div id="login" class="login" hidden>
-    <form id="login-form" class="login-card">
+    <form id="login-form" class="login-card" hidden>
       <div class="brand big"><span class="logo" aria-hidden="true"></span><span>Hangar</span></div>
-      <p class="muted">Your Claude Code sessions, from any device.</p>
-      <label for="login-password">Password</label>
-      <input id="login-password" type="password" autocomplete="current-password" required autofocus>
-      <button class="btn primary" type="submit">Sign in</button>
+      <p class="muted">Your coding agent sessions, from any device.</p>
+      <a class="btn primary wide" id="oidc-login" href="/api/auth/oidc/start" hidden></a>
+      <div class="or" id="login-or" hidden><span>or</span></div>
+      <div id="pw-fields" class="pw-fields">
+        <label for="login-username">Username</label>
+        <input id="login-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        <label for="login-password">Password</label>
+        <input id="login-password" type="password" autocomplete="current-password" required>
+        <button class="btn primary" type="submit" id="login-submit">Sign in</button>
+      </div>
       <p id="login-error" class="error" role="alert"></p>
-      <p class="hint">The password is <code>HANGAR_PASSWORD</code>, or the one Hangar printed in its log on first start.</p>
+      <p class="hint">Forgot your password? On the server, run
+        <code>docker exec -it hangar python -m hangar reset-password</code></p>
+    </form>
+
+    <form id="setup-form" class="login-card" hidden>
+      <div class="brand big"><span class="logo" aria-hidden="true"></span><span>Hangar</span></div>
+      <h1 class="setup-title">Set up Hangar</h1>
+      <p class="muted">Create the owner account. It's the only account on this Hangar, and it can run commands on this machine, so pick a strong password.</p>
+      <label for="setup-code">Setup code</label>
+      <input id="setup-code" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
+             placeholder="XXXX-XXXX-XXXX" required>
+      <p class="hint">Hangar prints this code in its log each time it starts. Run
+        <code>docker compose logs hangar</code> in Hangar's folder to see it.</p>
+      <label for="setup-username">Username</label>
+      <input id="setup-username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      <label for="setup-password">Password</label>
+      <input id="setup-password" type="password" autocomplete="new-password" minlength="10" required>
+      <label for="setup-confirm">Confirm password</label>
+      <input id="setup-confirm" type="password" autocomplete="new-password" minlength="10" required>
+      <p class="hint">At least 10 characters.</p>
+      <button class="btn primary" type="submit">Create account</button>
+      <p id="setup-error" class="error" role="alert"></p>
     </form>
   </div>
 
@@ -59,6 +86,6 @@
   <script src="/static/vendor/addon-web-links.js"></script>
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/purify.min.js"></script>
-  <script src="/static/app.js?v=1"></script>
+  <script src="/static/app.js?v=8"></script>
 </body>
 </html>
