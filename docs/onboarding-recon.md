@@ -88,7 +88,7 @@ Checked 2026-10-29 with Claude Code 2.1.308, Codex CLI 0.165.0, and Ollama 0.40.
   200k context window. Hangar should hide cost for Ollama sessions. Ollama doesn't support prompt
   caching, token counting, or `tool_choice`.
 - Model list: `GET /api/tags`. Health/version: `GET /api/version`.
-- From the container, `host.docker.internal:11434` and `10.10.40.40:11434` both answered, but with
+- From the container, `host.docker.internal:11434` and a LAN address both answered, but with
   different Ollama versions and models, so they are two separate servers. Multiple Ollama servers
   should be allowed.
 

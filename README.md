@@ -1,18 +1,18 @@
 # Hangar
 
-**Park your Claude Code sessions. Pick them back up from any device.**
+**Park your coding agent sessions. Pick them back up from any device.**
 
-Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview). Every session runs inside tmux, so it keeps going when you close the browser. You can open it again from your laptop, phone, or tablet, over your home network or Tailscale. The layout follows Open WebUI: your sessions are in a sidebar, grouped by date and titled automatically. Each one has a full terminal and a readable transcript.
+Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex), on your Claude or ChatGPT plan or on local models through Ollama. Every session runs inside tmux, so it keeps going when you close the browser. You can open it again from your laptop, phone, or tablet, over your home network or Tailscale. The layout follows Open WebUI: your sessions are in a sidebar, grouped by date and titled automatically. Each one has a full terminal and a readable transcript.
 
-It also has a dashboard with your Claude plan usage and token activity.
+It also has a dashboard with your Claude and ChatGPT plan usage and token activity. On first start it walks you through creating the owner account and connecting your AI, all in the browser; you can also sign in through your own identity provider (Authentik, Microsoft, Google, Keycloak, Duo).
 
 ![Dashboard](docs/dashboard.png)
 
 ## Features
 
-- **Session history.** Every Claude Code conversation on the machine, with its AI-generated title, project, git branch, token count, and cost. Search covers titles, folders, and everything you typed.
+- **Session history.** Every Claude Code and Codex conversation on the machine, with its AI-generated title, project, git branch, token count, and cost. Search covers titles, folders, and everything you typed.
 - **Live terminals in the browser.** Each session runs in its own tmux session. Attach from as many devices as you like. Closing the tab only detaches.
-- **Resume anything.** Sessions that aren't running have a **Resume** button, which runs `claude --resume` in a new tmux session. **Fork** starts a copy with a new ID.
+- **Resume anything.** Sessions that aren't running have a **Resume** button, which runs `claude --resume` (or `codex resume`) in a new tmux session. **Fork** starts a copy with a new ID.
 - **Survives restarts.** When the container comes back up, Hangar can reopen the sessions that were running.
 - **Transcript view.** A readable version of the conversation, with Markdown rendered and tool calls folded.
 - **Works on phones.** A key bar for Esc, Shift+Tab, arrows, Ctrl+C and so on, and a compose box for long messages. You can also add it to your home screen as an app.
@@ -22,6 +22,7 @@ It also has a dashboard with your Claude plan usage and token activity.
 - **Claude can install what it needs.** In Docker, Claude can `sudo apt-get install` missing tools. You get a permission prompt for every sudo command, even in auto mode, and installed packages come back after the container is recreated.
 - **File uploads.** Each session has a **Files** tab for its folder: upload by button or drag and drop, browse subfolders, and download what Claude made. In the terminal, **+ Attach** (or dropping a file on it) uploads into the session folder and types `@file` into Claude's prompt, so you can add a question before sending.
 - **Pins, archive, renames, and private notes** for each session.
+- **Sign in with SSO.** Optional OpenID Connect sign-in through Authentik, Microsoft Entra ID, Google, Keycloak, Duo, or any other provider.
 - **Connect your AI without API keys.** Sign in with your Claude subscription, link ChatGPT through OpenAI's Codex CLI (Hangar installs it for you), and add Ollama servers on this machine or your network. All from the browser, during setup or later in Settings.
 
 | Session terminal | Transcript | Phone |
@@ -41,6 +42,10 @@ docker compose up -d --build
 docker compose logs hangar     # shows the one-time setup code
 ```
 
+| First-run setup | Connect your AI |
+|---|---|
+| ![Setup](docs/setup.png) | ![Connect your AI](docs/connect-ai.png) |
+
 Open `http://<this-machine>:7878`, enter the setup code, and create the owner account. Hangar has one account, and only someone who can read its log can create it. Next, link your AI services (see [Connecting AI](#connecting-ai)).
 
 Forgot the password? Run `docker exec -it hangar python -m hangar reset-password`. It prints a new one and signs every device out.
@@ -50,9 +55,9 @@ Forgot the password? Run `docker exec -it hangar python -m hangar reset-password
 - Hangar creates the owner account `admin` with your `HANGAR_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
 - Hangar now keeps its own Claude login by default instead of using the host's `~/.claude`. To keep sharing the host's login and history, add `CLAUDE_DIR=/home/you/.claude` to `.env` (the path the old default pointed at) before you run `docker compose up -d --build`.
 
-To stop it, run `docker compose down`. Your conversations stay in `~/.claude` and can be resumed later. Run `docker compose up -d` to start it again.
+To stop it, run `docker compose down`. Your conversations stay in Claude's and Codex's folders and can be resumed later. Run `docker compose up -d` to start it again.
 
-To update Claude Code inside the image: `docker compose build --no-cache && docker compose up -d`.
+To update Claude Code inside the image: `docker compose build --no-cache && docker compose up -d`. Codex is pinned to a version Hangar has been tested with and updates with Hangar.
 
 ### Windows (Docker Desktop + WSL)
 
@@ -101,6 +106,8 @@ Codex's own command sandbox can't work inside Docker (it needs user namespaces).
 
 Hangar can use an OpenID Connect provider for sign-in: Authentik, Microsoft Entra ID, Google, Keycloak, Duo, or any other. It still has one owner; you link your own identity at the provider, and only that identity can sign in.
 
+![Sign-in settings](docs/sso.png)
+
 1. In **Settings > Sign-in**, pick the provider. Copy the **Redirect URI** Hangar shows (`https://<your-hangar>/api/auth/oidc/callback`).
 2. At the provider, create an OIDC client (confidential, authorization code) with that redirect URI. Copy its issuer URL, client ID, and client secret into Hangar and click **Save**. Hangar checks `<issuer>/.well-known/openid-configuration` right away.
 3. Click **Link with …** and sign in at the provider. Hangar records that identity (issuer + subject).
@@ -113,6 +120,8 @@ The redirect URI is the address you open Hangar at. If you use more than one (LA
 
 **New session** lets you pick the agent and model:
 
+![New session](docs/new-session.png)
+
 - **Claude Code** with your Claude subscription (Opus, Sonnet, Haiku), or with any model on a linked Ollama server.
 - **Codex** with your ChatGPT plan, or with an Ollama model (no ChatGPT sign-in needed for that).
 - **Plain shell.**
@@ -123,8 +132,8 @@ Sessions on Ollama are tagged *Ollama*. Hangar remembers which server and model 
 
 ## How sessions work
 
-- **New session** opens a folder picker (limited to `WORKSPACE`) and starts `claude --session-id <uuid>` inside a new tmux session. Hangar uses that ID to link the terminal to the conversation log.
-- When Claude exits, the tmux session drops to a shell in the same folder, so nothing disappears unexpectedly. **Stop** closes the tmux session.
+- **New session** opens a folder picker (limited to `WORKSPACE`). For Claude it starts `claude --session-id <uuid>` inside a new tmux session, and Hangar uses that ID to link the terminal to the conversation log.
+- When the agent exits, the tmux session drops to a shell in the same folder, so nothing disappears unexpectedly. **Stop** closes the tmux session.
 - Claude Code stores conversations in `~/.claude/projects/<folder-path>/<id>.jsonl`. Hangar reads those files incrementally and never changes them.
 - Codex runs with `--no-daemon`, so each tmux session owns its Codex process. Codex can't be given an ID up front, so Hangar links the terminal to the conversation once the Codex process opens its log in `~/.codex/sessions/`. Codex compresses logs older than a week; Hangar reads those too (with `zstd`, which is in the image).
 - The workspace is mounted at **the same path** inside the container. That's why `claude --resume` works for sessions started on the host, and the other way around.
@@ -144,7 +153,7 @@ If you need the host's full toolchain instead, run Hangar without Docker (below)
 
 ## Running without Docker
 
-Needs Linux or macOS (or WSL), Python 3.10+, tmux, and Claude Code.
+Needs Linux or macOS (or WSL), Python 3.10+, tmux, and Claude Code. Codex is installed from Settings if you link ChatGPT; it needs `zstd` to read week-old Codex logs.
 
 ```bash
 python3 -m venv ~/.local/share/hangar-venv
@@ -196,11 +205,13 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 
 - The usage numbers come from the same unofficial endpoint Claude Code's `/usage` uses. It rate-limits fast polling, so Hangar checks every 5 minutes and backs off on errors. It only works with a Claude subscription login, not an API key.
 - The "cost" on a session is Claude Code's API-equivalent estimate, not what a subscription charges.
-- Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see.
+- Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see. For Codex it comes from the turn events in its log.
+- The ChatGPT usage card only updates while you use Codex; Codex reports your limits with each reply, and Hangar doesn't call OpenAI on its own.
+- Local models through Ollama are much weaker agents than Claude or GPT, and Claude Code features Ollama doesn't support (prompt caching, token counting) are skipped. The first message to a model that isn't loaded can take a minute.
 
 ## Development
 
-The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), session logs (`sessions.py`), usage (`usage.py`), and the terminal bridge (`terminal.py`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
+The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), Claude and Codex session logs (`sessions.py`, `codex_sessions.py`), usage (`usage.py`), the terminal bridge (`terminal.py`), the owner account (`auth.py`), SSO (`oidc.py`), and linking Claude, ChatGPT, and Ollama (`providers/`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
 
 ```bash
 HANGAR_PASSWORD=dev-password HANGAR_PORT=7979 python -m hangar   # sign in as admin
@@ -212,7 +223,7 @@ python -m pytest -q                                              # tests (needs 
 - [xterm.js](https://xtermjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0)
 - The usage dashboard is adapted from UsageMeter, a tray app by the same author.
 
-Hangar is an independent project. It is not made by or affiliated with Anthropic. Claude and Claude Code are trademarks of Anthropic.
+Hangar is an independent project. It is not made by or affiliated with Anthropic, OpenAI, or Ollama. Claude and Claude Code are trademarks of Anthropic; ChatGPT and Codex are trademarks of OpenAI.
 
 ## License
 

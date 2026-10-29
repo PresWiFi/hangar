@@ -101,7 +101,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   display: inline-grid; place-items: center; color: var(--text-2); font-size: 16px;
 }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
-input[type=text], input[type=password], input[type=search], select, textarea {
+input[type=text], input[type=password], input[type=search], input[type=url], select, textarea {
   background: var(--surface); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px;
   outline: none; width: 100%;
 }
