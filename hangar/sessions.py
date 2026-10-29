@@ -68,6 +68,7 @@ class Session:
     tokens: dict = field(default_factory=lambda: {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0})
     search: list = field(default_factory=list)
     search_len: int = 0
+    agent: str = "claude"
 
     @property
     def title(self) -> str:
@@ -80,7 +81,7 @@ class Session:
             "last_prompt": (self.last_prompt or "")[:300], "cwd": self.cwd, "project": Path(self.cwd).name if self.cwd else self.project_dir,
             "git_branch": self.git_branch, "started": self.started, "updated": self.updated,
             "prompts": self.prompts, "replies": self.replies, "cost": self.cost, "version": self.version,
-            "models": sorted(self.models, key=lambda m: -self.models[m]), "tokens": self.tokens,
+            "models": sorted(self.models, key=lambda m: -self.models[m]), "tokens": self.tokens, "agent": self.agent,
         }
 
 
@@ -241,7 +242,8 @@ class Index:
         return {s.id for s in self.sessions.values()
                 if q in s.title.lower() or (s.cwd and q in s.cwd.lower()) or any(q in t for t in s.search)}
 
-    def stats(self, days: int = 14) -> dict:
+    def stats(self, days: int = 14, extra: list[tuple] | None = None) -> dict:
+        """Token activity. `extra` adds records in the same shape from other agents (Codex)."""
         self.refresh()
         today = date.today()
         first = today - timedelta(days=days - 1)
@@ -251,7 +253,7 @@ class Index:
         projects = defaultdict(lambda: [0, 0])
         hours = [0] * 24
         last = None
-        for ts, model, inp, out, cw, cr, project, sid in self.token_records.values():
+        for ts, model, inp, out, cw, cr, project, sid in [*self.token_records.values(), *(extra or [])]:
             day = datetime.fromtimestamp(ts).date()
             if day < first:
                 continue

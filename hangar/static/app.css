@@ -468,3 +468,14 @@ a.icon-btn { text-decoration: none; display: inline-grid; place-items: center; }
 .wizard li.on { color: var(--text); font-weight: 600; }
 .welcome .page-head p { margin: 6px 0 0; max-width: 60ch; }
 .welcome-foot { margin-top: 20px; display: flex; justify-content: flex-end; }
+
+/* ---------- agents ---------- */
+.agent-pick { border: 0; padding: 0; margin: 0; display: flex; gap: 6px; flex-wrap: wrap; }
+.agent-pick legend { font-weight: 600; font-size: 13px; margin-bottom: 5px; padding: 0; }
+.seg { position: relative; }
+.seg input { position: absolute; opacity: 0; inset: 0; }
+.seg span { display: inline-block; border: 1px solid var(--border); border-radius: 9px; padding: 6px 12px; font-size: 13.5px; cursor: pointer; background: var(--surface); }
+.seg input:checked + span { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
+.s-meta .tag { color: var(--text); font-weight: 500; }
+#nf-agent-note:empty, #nf-mode-note:empty { display: none; }

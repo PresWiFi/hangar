@@ -15,6 +15,9 @@ from pydantic import BaseModel
 from . import __version__, auth, files, plugins, store, tmux
 from .providers.api import router as providers_router
 from .config import settings
+from .codex_sessions import codex_index
+from .codex_sessions import transcript as codex_transcript
+from .providers import ollama as ollama_servers
 from .sessions import index, transcript
 from .store import all_meta, set_meta
 from .usage import poller
@@ -54,8 +57,13 @@ async def _track_open_sessions() -> None:
 
 
 def _resumable(claude_id: str) -> bool:
-    s = index.get(claude_id)
+    s = index.get(claude_id) or codex_index.get(claude_id)
     return bool(s and (s.prompts or s.replies))
+
+
+def _find(sid: str):
+    """A conversation from either agent's logs."""
+    return index.get(sid) or codex_index.get(sid)
 
 
 app = FastAPI(title="Hangar", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
@@ -251,15 +259,28 @@ def _merge(summary: dict | None, meta: dict | None, live: dict | None) -> dict:
     if m.get("name"):
         out["title"] = m["name"]
     out["tmux"] = live
+    launch = tmux.launch_for(out["id"]) if out.get("id") else {}
+    if live and live.get("launch"):
+        launch = {**live["launch"], **launch}
+    out["agent"] = out.get("agent") or (live or {}).get("agent") or launch.get("agent") or "claude"
+    out["ollama"] = (launch.get("ollama") or {}).get("model")
+    if out["ollama"]:
+        out["cost"] = None  # Claude Code prices local models as if they were Claude; that number means nothing
+    out["codex_mode"] = launch.get("codex_mode") if out["agent"] == "codex" else None
     return out
 
 
 @app.get("/api/sessions")
 async def sessions(q: str = ""):
-    summaries, live = await asyncio.gather(asyncio.to_thread(index.list), asyncio.to_thread(tmux.list_sessions))
+    claude_list, codex_list, live = await asyncio.gather(
+        asyncio.to_thread(index.list), asyncio.to_thread(codex_index.list), asyncio.to_thread(tmux.list_sessions))
+    summaries = sorted(claude_list + codex_list, key=lambda s: -(s["updated"] or 0))
     meta = all_meta()
     by_claude = {t["claude_id"]: t for t in live if t["claude_id"]}
-    matches = await asyncio.to_thread(index.search, q) if q else None
+    matches = None
+    if q:
+        a, b = await asyncio.gather(asyncio.to_thread(index.search, q), asyncio.to_thread(codex_index.search, q))
+        matches = a | b
     known = set()
     items = []
     for s in summaries:
@@ -282,7 +303,7 @@ async def sessions(q: str = ""):
 
 @app.get("/api/sessions/{sid}")
 async def session(sid: str):
-    s = await asyncio.to_thread(index.get, sid)
+    s = await asyncio.to_thread(_find, sid)
     live = await asyncio.to_thread(tmux.find_by_claude, sid)
     if not s and not live:
         raise HTTPException(404, "Session not found")
@@ -292,10 +313,11 @@ async def session(sid: str):
 
 @app.get("/api/sessions/{sid}/transcript")
 async def session_transcript(sid: str, limit: int = 400):
-    s = await asyncio.to_thread(index.get, sid)
+    s = await asyncio.to_thread(_find, sid)
     if not s:
         return {"items": []}
-    return {"items": await asyncio.to_thread(transcript, s, max(1, min(limit, 5000)))}
+    fn = codex_transcript if s.agent == "codex" else transcript
+    return {"items": await asyncio.to_thread(fn, s, max(1, min(limit, 5000)))}
 
 
 class MetaIn(BaseModel):
@@ -319,12 +341,13 @@ async def session_resume(sid: str, body: ResumeIn):
     existing = await asyncio.to_thread(tmux.find_by_claude, sid)
     if existing and not body.fork:
         return {"name": existing["name"], "claude_id": sid, "already_running": True}
-    s = await asyncio.to_thread(index.get, sid)
+    s = await asyncio.to_thread(_find, sid)
     if not s or not s.cwd:
         raise HTTPException(404, "No log for this session, so it can't be resumed")
     label = (all_meta().get(sid) or {}).get("name") or s.custom_title or s.ai_title or Path(s.cwd).name
+    opts = tmux.resume_options(sid, s.agent)
     try:
-        return await asyncio.to_thread(tmux.new_session, s.cwd, label=label, resume=sid, fork=body.fork)
+        return await asyncio.to_thread(tmux.new_session, s.cwd, label=label[:60], resume=sid, fork=body.fork, **opts)
     except tmux.TmuxError as e:
         _err(e)
 
@@ -337,6 +360,10 @@ class NewIn(BaseModel):
     model: str = ""
     permission_mode: str = ""
     shell: bool = False
+    agent: str = "claude"
+    codex_mode: str = "ask"
+    ollama_server: str = ""     # run on this Ollama server's model instead of the agent's own service
+    ollama_model: str = ""
 
 
 @app.post("/api/tmux/new")
@@ -344,10 +371,25 @@ async def tmux_new(body: NewIn):
     if body.permission_mode and body.permission_mode not in {"default", "acceptEdits", "plan", "auto",
                                                             "bypassPermissions", "manual"}:
         raise HTTPException(400, "Unknown permission mode")
+    if body.agent not in ("claude", "codex"):
+        raise HTTPException(400, "Unknown agent")
+    if body.codex_mode not in tmux.CODEX_MODES:
+        raise HTTPException(400, "Unknown Codex mode")
+    if not _inside_workspace(body.cwd):
+        raise HTTPException(403, "Outside the configured workspaces (HANGAR_WORKSPACES)")
+    ollama = None
+    if body.ollama_server:
+        server = ollama_servers.get(body.ollama_server)
+        if not server:
+            raise HTTPException(400, "That Ollama server isn't added any more")
+        if not body.ollama_model.strip():
+            raise HTTPException(400, "Pick a model on the Ollama server")
+        ollama = {"server": server["id"], "url": server["url"], "model": body.ollama_model.strip()}
     try:
         return await asyncio.to_thread(tmux.new_session, body.cwd, label=body.label.strip()[:60],
                                        model=body.model.strip(), permission_mode=body.permission_mode,
-                                       shell_only=body.shell)
+                                       shell_only=body.shell, agent=body.agent, codex_mode=body.codex_mode,
+                                       ollama=ollama)
     except tmux.TmuxError as e:
         _err(e)
 
@@ -478,7 +520,10 @@ async def files_upload(request: Request, dir: str, name: str, overwrite: bool = 
 
 @app.get("/api/overview")
 async def overview():
-    return {**poller.snapshot(), "stats": await asyncio.to_thread(index.stats)}
+    codex_records, codex_usage = await asyncio.gather(asyncio.to_thread(codex_index.token_records),
+                                                      asyncio.to_thread(codex_index.usage))
+    stats = await asyncio.to_thread(index.stats, 14, codex_records)
+    return {**poller.snapshot(), "stats": stats, "codex_usage": codex_usage}
 
 
 @app.post("/api/usage/refresh")

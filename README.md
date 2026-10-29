@@ -90,15 +90,31 @@ After setup, Hangar asks which AI services to link. You can skip any of them and
 
 If you can't use device codes, choose **Use browser sign-in instead**. After you sign in, your browser lands on a `localhost:1455` page that doesn't load. That's expected: copy that page's address and paste it into Hangar, which finishes the sign-in. The login is stored in `CODEX_HOME` (`~/.codex` in the container's home volume).
 
-Codex's own command sandbox can't work inside Docker (it needs user namespaces), so in Hangar Codex relies on the container as its boundary and keeps asking before it runs commands, the same footing as Claude Code.
+Codex's own command sandbox can't work inside Docker (it needs user namespaces). So when you start a Codex session you pick how it runs commands:
+
+- **Ask before commands** (default): Codex keeps its sandbox. Each command fails there first, then Codex asks whether to run it for real. Safe, but a little slow, and small local models can retry a few times before asking.
+- **Full access**: no sandbox and no questions. The container is the only boundary.
 
 **Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
+
+## Agents and models
+
+**New session** lets you pick the agent and model:
+
+- **Claude Code** with your Claude subscription (Opus, Sonnet, Haiku), or with any model on a linked Ollama server.
+- **Codex** with your ChatGPT plan, or with an Ollama model (no ChatGPT sign-in needed for that).
+- **Plain shell.**
+
+Codex sessions get the same treatment as Claude's: they're listed in the sidebar (tagged *Codex*), have a transcript with tool calls, show working/waiting status, can be resumed, forked, and restored after a restart. The dashboard's token activity counts both, and a **ChatGPT usage** card shows your Codex plan limits once Codex has reported them.
+
+Sessions on Ollama are tagged *Ollama*. Hangar remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
 
 ## How sessions work
 
 - **New session** opens a folder picker (limited to `WORKSPACE`) and starts `claude --session-id <uuid>` inside a new tmux session. Hangar uses that ID to link the terminal to the conversation log.
 - When Claude exits, the tmux session drops to a shell in the same folder, so nothing disappears unexpectedly. **Stop** closes the tmux session.
 - Claude Code stores conversations in `~/.claude/projects/<folder-path>/<id>.jsonl`. Hangar reads those files incrementally and never changes them.
+- Codex runs with `--no-daemon`, so each tmux session owns its Codex process. Codex can't be given an ID up front, so Hangar links the terminal to the conversation once the Codex process opens its log in `~/.codex/sessions/`. Codex compresses logs older than a week; Hangar reads those too (with `zstd`, which is in the image).
 - The workspace is mounted at **the same path** inside the container. That's why `claude --resume` works for sessions started on the host, and the other way around.
 - tmux runs inside the container. Stopping the container ends the tmux sessions but not the conversations. With `HANGAR_AUTORESTORE=true`, they're resumed automatically on the next start. Without it, the sidebar shows a **Restore** button.
 

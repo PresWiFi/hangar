@@ -233,6 +233,14 @@ function liveStatus(s) {
   return "shell";
 }
 const STATUS_TEXT = { busy: "Working", idle: "Waiting", shell: "Shell" };
+const agentName = (s) => (s.agent === "codex" ? "Codex" : "Claude");
+/* Short tag for the sidebar: which agent, and whether it runs on an Ollama model. */
+function agentTag(s) {
+  const parts = [];
+  if (s.agent === "codex") parts.push("Codex");
+  if (s.ollama) parts.push("Ollama");
+  return parts.join(" + ");
+}
 
 function sessionHref(s) {
   return s.id ? `#/s/${s.id}` : `#/t/${s.tmux?.name}`;
@@ -266,7 +274,7 @@ function renderSidebar() {
   const row = (s) => {
     const st = liveStatus(s);
     const href = sessionHref(s);
-    const sub = [s.project, st ? STATUS_TEXT[st] : fmt.ago(s.updated)].filter(Boolean).join(" · ");
+    const sub = [s.project, agentTag(s), st ? STATUS_TEXT[st] : fmt.ago(s.updated)].filter(Boolean).join(" · ");
     const dotCls = st || (s.meta?.pinned ? "pin" : "");
     return `<a class="s-item${route === href ? " active" : ""}" href="${esc(href)}" title="${esc(s.title)}">
       <span class="dot ${dotCls}" aria-hidden="true"></span><span class="s-title">${esc(s.title)}</span>
@@ -793,6 +801,24 @@ function dashboardView() {
       ${meters}${extra}${o.error ? `<p class="dim" style="font-size:12px;margin:8px 0 0">${esc(o.error)}</p>` : ""}</div>`;
   }
 
+  function codexUsageCard(c) {
+    const label = (m) => ({ 300: "5-hour limit", 10080: "Weekly limit", 43200: "30-day limit" }[m] || (m ? `${Math.round(m / 60)}-hour limit` : "Limit"));
+    const meters = c.windows.map((w) => {
+      const lv = level(w.used_percent);
+      const resets = w.resets_at ? new Date(w.resets_at * 1000).toISOString() : null;
+      return `<div class="meter">
+        <div class="meter-top"><span>${esc(label(w.window_minutes))}</span><b>${fmt.pct(w.used_percent)}</b></div>
+        <div class="bar"><i class="${lv.cls}" style="width:${Math.min(100, w.used_percent)}%"></i></div>
+        <div class="meter-sub"><span>${resets ? `Resets in ${fmt.until(resets)} · ${fmt.when(resets)}` : ""}</span>
+          <span>${lv.label ? `<span class="status-tag ${lv.cls}"><span class="sw" style="background:var(--${lv.cls})"></span>${lv.label}</span>` : ""}</span></div>
+      </div>`;
+    }).join("");
+    const plan = c.plan ? `<span class="badge">${esc(c.plan)}</span>` : "";
+    return `<div class="card span-5"><h2><span>ChatGPT usage <small class="dim">via Codex</small></span>${plan}</h2>
+      ${meters || `<p class="muted">No limits reported.</p>`}
+      <p class="dim" style="font-size:12px;margin:8px 0 0">As of the last Codex reply, ${esc(fmt.ago(c.as_of))}. It updates while you use Codex.</p></div>`;
+  }
+
   function activityCard(st) {
     const days = st.days;
     const labels = days.map((d, i) => (i % 2 === (days.length - 1) % 2 ? new Date(d.date + "T12:00").toLocaleDateString(undefined, { weekday: "narrow" }) : ""));
@@ -859,6 +885,7 @@ function dashboardView() {
       <div class="grid">
         ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
         ${o ? activityCard(o.stats) : ""}
+        ${o?.codex_usage ? codexUsageCard(o.codex_usage) : ""}
         ${o ? projectsCard(o.stats) : ""}
         ${o ? hoursCard(o.stats) : ""}
       </div>`;
@@ -907,7 +934,9 @@ function sessionView({ id, tmuxName }) {
     const meta = [
       s.cwd && `<span title="${esc(s.cwd)}">${esc(s.cwd.replace(/^.*\/([^/]+\/[^/]+)$/, "…/$1"))}</span>`,
       s.git_branch && `<span>⎇ ${esc(s.git_branch)}</span>`,
-      s.models?.length && `<span>${esc(s.models.join(", "))}</span>`,
+      s.agent === "codex" && `<span class="tag">Codex${s.codex_mode ? ` · ${s.codex_mode === "full" ? "Full access" : "Asks before commands"}` : ""}</span>`,
+      s.ollama && `<span class="tag" title="Runs on an Ollama model">Ollama · ${esc(s.ollama)}</span>`,
+      s.models?.length && !s.ollama && `<span>${esc(s.models.join(", "))}</span>`,
       tk != null && `<span>${fmt.tokens(tk)} tokens in/out</span>`,
       s.cost != null && `<span>${fmt.money(s.cost)} API-equivalent</span>`,
       s.updated && `<span class="hide-sm">Updated ${fmt.ago(s.updated)}</span>`,
@@ -941,11 +970,12 @@ function sessionView({ id, tmuxName }) {
     $("#archive")?.addEventListener("click", () => saveMeta({ archived: !s.meta?.archived }));
     $("#rename")?.addEventListener("click", rename);
     $("#copy")?.addEventListener("click", async () => {
-      const cmd = `cd ${JSON.stringify(s.cwd || ".")} && claude --resume ${s.id}`;
+      const cmd = s.agent === "codex" ? `cd ${JSON.stringify(s.cwd || ".")} && codex resume ${s.id}`
+        : `cd ${JSON.stringify(s.cwd || ".")} && claude --resume ${s.id}`;
       try { await navigator.clipboard.writeText(cmd); toast("Copied"); } catch { prompt("Copy this command:", cmd); }
     });
     $("#kill")?.addEventListener("click", async () => {
-      if (!confirm("Stop this tmux session? Claude will exit, but you can resume the conversation later.")) return;
+      if (!confirm(`Stop this tmux session? ${agentName(s)} will exit, but you can resume the conversation later.`)) return;
       await api(`/api/tmux/${live.name}/kill`, { method: "POST" }).catch((e) => toast(e.message));
       term?.dispose(); term = null;
       await loadSessions();
@@ -1135,7 +1165,7 @@ function sessionView({ id, tmuxName }) {
     lastTranscriptKey = key;
     const sc = $("#tr-scroll");
     const atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 80 || !el.dataset.done;
-    el.innerHTML = renderTranscript(data.items) || `<p class="muted">No messages yet.</p>`;
+    el.innerHTML = renderTranscript(data.items, agentName(s)) || `<p class="muted">No messages yet.</p>`;
     el.dataset.done = "1";
     if (atBottom) sc.scrollTop = sc.scrollHeight;
   }
@@ -1160,7 +1190,7 @@ function sessionView({ id, tmuxName }) {
   };
 }
 
-function renderTranscript(items) {
+function renderTranscript(items, who = "Claude") {
   const md = (t) => DOMPurify.sanitize(marked.parse(t, { breaks: false, gfm: true }));
   let html = "";
   let toolRun = [];
@@ -1178,7 +1208,7 @@ function renderTranscript(items) {
     if (it.role === "user") {
       html += `<div class="msg user"><div class="who"><span>You</span><span>${esc(time)}</span></div><div class="body">${esc(it.text)}</div></div>`;
     } else {
-      html += `<div class="msg assistant"><div class="who"><span>Claude</span><span>${esc(time)}</span></div><div class="body">${md(it.text)}</div></div>`;
+      html += `<div class="msg assistant"><div class="who"><span>${esc(who)}</span><span>${esc(time)}</span></div><div class="body">${md(it.text)}</div></div>`;
     }
   }
   flush();
@@ -1293,6 +1323,7 @@ async function openNewSession() {
   const dlg = $("#dialog");
   const recent = [...new Set(state.sessions.map((s) => s.cwd).filter(Boolean))].slice(0, 8);
   let cwd = recent[0] || state.me?.workspaces?.[0] || "";
+  const avail = { codex: null, ollama: null };  // filled in below
   dlg.innerHTML = `<form method="dialog" id="new-form">
     <h2>New session</h2>
     <div class="field"><span>Folder</span>
@@ -1300,15 +1331,67 @@ async function openNewSession() {
       <div class="picker"><div class="picker-path"><button type="button" class="btn small ghost" id="pk-up" aria-label="Up one folder">↑</button><span id="pk-path"></span></div>
       <div class="picker-list" id="pk-list"></div></div></div>
     <div class="field"><span>Name <small>(optional)</small></span><input type="text" id="nf-label" maxlength="60" placeholder="e.g. Fix login bug"></div>
-    <div class="row2">
-      <label class="field"><span>Model</span><select id="nf-model"><option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option></select></label>
-      <label class="field"><span>Permission mode</span><select id="nf-perm"><option value="">Default</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypassPermissions">Bypass permissions</option></select></label>
+    <fieldset class="field agent-pick"><legend>Agent</legend>
+      <label class="seg"><input type="radio" name="nf-agent" value="claude" checked><span>Claude Code</span></label>
+      <label class="seg"><input type="radio" name="nf-agent" value="codex"><span>Codex</span></label>
+      <label class="seg"><input type="radio" name="nf-agent" value="shell"><span>Plain shell</span></label>
+    </fieldset>
+    <p class="hint" id="nf-agent-note"></p>
+    <div class="row2" id="nf-opts">
+      <label class="field"><span>Model</span><select id="nf-model"></select></label>
+      <label class="field" id="nf-perm-wrap"><span>Permission mode</span><select id="nf-perm"><option value="">Default</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypassPermissions">Bypass permissions</option></select></label>
+      <label class="field" id="nf-mode-wrap" hidden><span>Commands</span><select id="nf-mode">
+        <option value="ask">Ask before commands</option><option value="full">Full access, don't ask</option></select></label>
     </div>
-    <label class="check"><input type="checkbox" id="nf-shell"> Plain shell instead of Claude</label>
+    <p class="hint" id="nf-mode-note" hidden></p>
     <p class="error" id="nf-err"></p>
     <div class="dialog-actions"><button type="button" class="btn" id="nf-cancel">Cancel</button><button class="btn primary" id="nf-go" type="submit">Start session</button></div>
   </form>`;
   dlg.showModal();
+
+  const agent = () => dlg.querySelector("[name=nf-agent]:checked").value;
+  const MODE_NOTES = {
+    ask: "Codex's sandbox can't run inside Docker, so each command first fails there and Codex then asks you to run it for real.",
+    full: "Codex runs commands without asking. The container is the only boundary.",
+  };
+
+  function ollamaOptions() {
+    const servers = (avail.ollama || []).filter((sv) => sv.ok && sv.models.length);
+    return servers.map((sv) => `<optgroup label="Ollama · ${esc(sv.name)}">${sv.models.map((m) =>
+      `<option value="ollama:${esc(sv.id)}:${esc(m.name)}">${esc(m.name)}${m.size ? ` (${esc(m.size)})` : ""}</option>`).join("")}</optgroup>`).join("");
+  }
+
+  function syncAgent() {
+    const a = agent();
+    const x = avail.codex;
+    $("#nf-opts").hidden = a === "shell";
+    $("#nf-perm-wrap").hidden = a !== "claude";
+    $("#nf-mode-wrap").hidden = a !== "codex";
+    $("#nf-mode-note").hidden = a !== "codex";
+    $("#nf-mode-note").textContent = MODE_NOTES[$("#nf-mode").value];
+    const keep = $("#nf-model").value;
+    const own = a === "codex"
+      ? (x?.linked ? `<option value="">Default (ChatGPT)</option>` : "")
+      : `<option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option>`;
+    $("#nf-model").innerHTML = own + ollamaOptions();
+    if ([...$("#nf-model").options].some((o) => o.value === keep)) $("#nf-model").value = keep;
+    let note = "";
+    if (a === "codex") {
+      if (!x) note = "Checking Codex…";
+      else if (!x.installed) note = `Codex isn't installed yet. <a href="#/settings">Link ChatGPT in Settings</a>.`;
+      else if (!x.linked && !$("#nf-model").options.length) note = `Sign in with ChatGPT in <a href="#/settings">Settings</a>, or add an Ollama server to use Codex with a local model.`;
+      else if (!x.linked) note = "Not signed in to ChatGPT, so Codex can only use Ollama models.";
+    }
+    if (avail.ollama === null && a !== "shell") note += `${note ? " " : ""}Looking for Ollama models…`;
+    $("#nf-agent-note").innerHTML = note;
+    $("#nf-go").disabled = a === "codex" && (!x?.installed || !$("#nf-model").options.length);
+  }
+  dlg.querySelectorAll("[name=nf-agent]").forEach((r) => r.addEventListener("change", syncAgent));
+  $("#nf-mode").addEventListener("change", syncAgent);
+  $("#nf-agent-note").addEventListener("click", (e) => { if (e.target.closest("a")) dlg.close(); });
+  syncAgent();
+  api("/api/providers/codex").then((x) => { avail.codex = x; syncAgent(); }).catch(() => { avail.codex = { installed: false }; syncAgent(); });
+  api("/api/providers/ollama").then((o) => { avail.ollama = o.servers; syncAgent(); }).catch(() => { avail.ollama = []; syncAgent(); });
 
   async function browse(path) {
     try {
@@ -1331,11 +1414,18 @@ async function openNewSession() {
   $("#new-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     if (!cwd) { $("#nf-err").textContent = "Pick a folder."; return; }
+    const a = agent();
+    const model = $("#nf-model").value;
+    const body = { cwd, label: $("#nf-label").value, shell: a === "shell", agent: a === "codex" ? "codex" : "claude" };
+    if (model.startsWith("ollama:")) {
+      const [, server, ...rest] = model.split(":");
+      Object.assign(body, { ollama_server: server, ollama_model: rest.join(":") });
+    } else body.model = model;
+    if (a === "claude") body.permission_mode = $("#nf-perm").value;
+    if (a === "codex") body.codex_mode = $("#nf-mode").value;
     $("#nf-go").disabled = true;
     try {
-      const r = await api("/api/tmux/new", { method: "POST", body: {
-        cwd, label: $("#nf-label").value, model: $("#nf-model").value, permission_mode: $("#nf-perm").value, shell: $("#nf-shell").checked,
-      } });
+      const r = await api("/api/tmux/new", { method: "POST", body });
       dlg.close();
       await loadSessions();
       location.hash = r.claude_id ? `#/s/${r.claude_id}` : `#/t/${r.name}`;
