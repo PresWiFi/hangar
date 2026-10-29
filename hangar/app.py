@@ -12,7 +12,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, auth, files, plugins, tmux
+from . import __version__, auth, files, plugins, store, tmux
+from .providers.api import router as providers_router
 from .config import settings
 from .sessions import index, transcript
 from .store import all_meta, set_meta
@@ -60,6 +61,7 @@ def _resumable(claude_id: str) -> bool:
 app = FastAPI(title="Hangar", version=__version__, lifespan=lifespan, docs_url=None, redoc_url=None)
 PLUGINS = plugins.load(settings.plugins)
 plugins.active[:] = PLUGINS
+app.include_router(providers_router)
 for _plugin in PLUGINS:
     app.include_router(_plugin.router)
 
@@ -139,6 +141,7 @@ async def setup(body: Setup, request: Request):
         if not auth.setup_needed():
             raise HTTPException(409, "Hangar is already set up. Sign in instead.")
         await asyncio.to_thread(auth.create_owner, username, body.password)
+        store.kv_set("onboarding_pending", True)  # the welcome page offers to link AI providers next
     print(f'Setup done: owner account "{username}" created.', flush=True)
     return _signed_in(JSONResponse({"ok": True}), request)
 
@@ -215,6 +218,12 @@ async def change_username(body: UsernameChange):
     return {"ok": True, "username": username}
 
 
+@app.post("/api/onboarding/done")
+async def onboarding_done():
+    store.kv_set("onboarding_pending", False)
+    return {"ok": True}
+
+
 @app.post("/api/account/signout-all")
 async def signout_all(request: Request):
     auth.sign_out_everywhere()
@@ -226,6 +235,7 @@ async def me(request: Request):
     if not _authed(request):
         return JSONResponse({"authed": False}, status_code=401)
     return {"authed": True, "version": __version__, "hostname": settings.hostname, "user": auth.owner()["username"],
+            "onboarding": bool(store.kv_get("onboarding_pending")),
             "workspaces": settings.workspaces,
             "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None,
             "plugins": [p.public() for p in PLUGINS]}

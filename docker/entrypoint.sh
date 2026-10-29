@@ -27,12 +27,20 @@ if not current.get("hasCompletedOnboarding") or not current.get("projects"):
             seed = data
             print(f"Seeded ~/.claude.json from {b}")
             break
-    merged = {**current, **seed}
-    merged["hasCompletedOnboarding"] = True
-    merged.setdefault("theme", "dark")
-    with open(path, "w") as f:
-        json.dump(merged, f, indent=2)
-    os.chmod(path, 0o600)
+    current = {**current, **seed}
+    current["hasCompletedOnboarding"] = True
+    current.setdefault("theme", "dark")
+
+# Trust the workspace folders the owner configured (this covers their subfolders too). Otherwise a fresh
+# login asks "Do you trust this folder?" on the first session, and its default answer exits Claude.
+projects = current.setdefault("projects", {})
+for ws in os.environ.get("HANGAR_WORKSPACES", "").replace(";", ",").split(","):
+    ws = ws.strip().rstrip("/")
+    if ws:
+        projects.setdefault(ws, {})["hasTrustDialogAccepted"] = True
+with open(path, "w") as f:
+    json.dump(current, f, indent=2)
+os.chmod(path, 0o600)
 PY
 
 # Mounted repos can be owned by a different uid than the container user; let git use them.

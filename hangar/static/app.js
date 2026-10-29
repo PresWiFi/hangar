@@ -420,6 +420,7 @@ function route() {
   else if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
   else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
   else if (h === "#/settings") state.view = settingsView();
+  else if (h === "#/welcome") state.view = welcomeView();
   else state.view = dashboardView();
   renderSidebar();
   renderSideNav();
@@ -431,12 +432,245 @@ function topbar(title) {
     <span class="t">${esc(title)}</span><button class="icon-btn" data-act="new" aria-label="New session">+</button></div>`;
 }
 
+/* ---------------- AI providers (welcome page + settings) ---------------- */
+
+/* Renders the Claude, ChatGPT, and Ollama cards into `root`. Returns { dispose }. */
+function providerCards(root) {
+  let disposed = false;
+  let poll = null;
+  const ui = { claudeCode: "", codexUrl: "", ollamaUrl: "", ollamaName: "", found: null, busy: {} };
+  let data = null;
+
+  const plan = (p) => (p ? ` · ${esc(p[0].toUpperCase() + p.slice(1))} plan` : "");
+  const linkedLine = (who, p) => `<p class="linked"><span class="ok-mark" aria-hidden="true">✓</span> Linked${who ? ` as <b>${esc(who)}</b>` : ""}${plan(p)}</p>`;
+  const errLine = (id) => `<p class="error" id="${id}" role="alert"></p>`;
+
+  function claudeCard(c) {
+    let body;
+    if (c.linked) {
+      body = `${linkedLine(c.email, c.plan)}
+        <div class="form-actions"><button class="btn" data-pa="claude-logout">Unlink</button></div>`;
+    } else if (c.login?.url) {
+      body = `<ol class="steps">
+          <li><span>Sign in on claude.ai.</span>
+            <a class="btn primary" href="${esc(c.login.url)}" target="_blank" rel="noopener noreferrer">Open Claude sign-in ↗</a></li>
+          <li><span>claude.ai then shows a code. Paste it here.</span>
+            <form class="inline-form" data-pf="claude-code">
+              <input type="text" id="claude-code" autocomplete="off" spellcheck="false" placeholder="Paste the code" value="${esc(ui.claudeCode)}" required>
+              <button class="btn primary" type="submit">Finish</button></form></li>
+        </ol>
+        <div class="form-actions"><button class="btn ghost" data-pa="claude-cancel">Cancel</button></div>`;
+    } else {
+      body = `<p class="muted">Use your Claude subscription (Pro or Max). No API key needed.</p>
+        <div class="form-actions"><button class="btn primary" data-pa="claude-login">Sign in with Claude</button></div>`;
+    }
+    return `<section class="card provider" aria-labelledby="pv-claude"><h3 id="pv-claude">Claude <small>Claude Code</small></h3>
+      ${c.error ? `<p class="error">${esc(c.error)}</p>` : body}${errLine("claude-error")}
+      <p class="hint">Login folder: <code>${esc(c.folder)}</code></p></section>`;
+  }
+
+  function codexCard(x) {
+    let body;
+    const inst = x.install || {};
+    if (x.linked) {
+      body = `${linkedLine(x.email, x.plan)}
+        <div class="form-actions"><button class="btn" data-pa="codex-logout">Unlink</button></div>`;
+    } else if (["downloading", "verifying", "unpacking"].includes(inst.state)) {
+      const pct = inst.total_bytes ? Math.min(100, (100 * inst.done_bytes) / inst.total_bytes) : 0;
+      const label = inst.state === "downloading" ? `Downloading Codex… ${Math.round(inst.done_bytes / 1e6)} of ${Math.round(inst.total_bytes / 1e6)} MB`
+        : inst.state === "verifying" ? "Checking the download…" : "Unpacking…";
+      body = `<p>${label}</p><div class="bar" role="progressbar" aria-valuenow="${Math.round(pct)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${pct}%"></i></div>`;
+    } else if (!x.installed) {
+      body = `<p class="muted">Use your ChatGPT plan through OpenAI's Codex CLI. No API key needed.
+          Hangar downloads Codex ${esc(x.version)} once (about ${x.download_mb} MB) and checks it before installing.</p>
+        ${inst.state === "error" ? `<p class="error">${esc(inst.error)}</p>` : ""}
+        <div class="form-actions"><button class="btn primary" data-pa="codex-install">Install Codex and sign in</button></div>`;
+    } else if (x.login?.mode === "device" && x.login.code) {
+      body = `<ol class="steps">
+          <li><span>In ChatGPT, open Settings → Security and turn on <b>device code sign-in</b> for Codex. You only need to do this once.</span>
+            <a class="btn" href="${esc(x.device_settings_url)}" target="_blank" rel="noopener noreferrer">Open ChatGPT settings ↗</a></li>
+          <li><span>Open the Codex sign-in page and enter this code:</span>
+            <div class="device-code"><code id="codex-code">${esc(x.login.code)}</code>
+              <button class="btn small" data-pa="codex-copy" type="button">Copy</button></div>
+            <a class="btn primary" href="${esc(x.login.url)}" target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in ↗</a></li>
+        </ol>
+        <p class="waiting" aria-live="polite">${x.login.running ? "Waiting for you to finish signing in…" : esc(x.login.error || "Sign-in stopped.")}</p>
+        <div class="form-actions"><button class="btn ghost" data-pa="codex-cancel">Cancel</button>
+          <button class="btn ghost" data-pa="codex-browser">Use browser sign-in instead</button></div>`;
+    } else if (x.login?.mode === "browser" && x.login.url) {
+      body = `<ol class="steps">
+          <li><span>Sign in with ChatGPT.</span>
+            <a class="btn primary" href="${esc(x.login.url)}" target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in ↗</a></li>
+          <li><span>Afterwards your browser opens a page on <code>localhost:1455</code> that won't load. That's expected.
+            Copy that page's whole address from the address bar and paste it here.</span>
+            <form class="inline-form" data-pf="codex-callback">
+              <input type="url" id="codex-url" autocomplete="off" spellcheck="false" placeholder="http://localhost:1455/auth/callback?code=…" value="${esc(ui.codexUrl)}" required>
+              <button class="btn primary" type="submit">Finish</button></form></li>
+        </ol>
+        ${x.login.running ? "" : `<p class="error">${esc(x.login.error || "Sign-in stopped. Start again.")}</p>`}
+        <div class="form-actions"><button class="btn ghost" data-pa="codex-cancel">Cancel</button></div>`;
+    } else {
+      body = `<p class="muted">Codex ${esc(x.version)} is installed. Sign in with your ChatGPT account.</p>
+        <div class="form-actions"><button class="btn primary" data-pa="codex-login">Sign in with ChatGPT</button></div>`;
+    }
+    return `<section class="card provider" aria-labelledby="pv-codex"><h3 id="pv-codex">ChatGPT <small>Codex</small></h3>
+      ${body}${errLine("codex-error")}</section>`;
+  }
+
+  function ollamaCard(o) {
+    const rows = o.servers.map((sv) => `<li class="server">
+        <div><b>${esc(sv.name)}</b> <code>${esc(sv.url)}</code><br>
+          ${sv.ok ? `<span class="ok-text">✓ Ollama ${esc(sv.version || "")} · ${sv.models.length} model${sv.models.length === 1 ? "" : "s"}</span>`
+            : `<span class="error">${esc(sv.error)}</span>`}</div>
+        <button class="btn small ghost" data-pa="ollama-remove" data-id="${esc(sv.id)}" aria-label="Remove ${esc(sv.name)}">Remove</button></li>`).join("");
+    const found = (ui.found || []).map((f) => `<li class="server found">
+        <div>Found Ollama at <code>${esc(f.url)}</code><br><span class="muted">${f.models.length} model${f.models.length === 1 ? "" : "s"}</span></div>
+        <button class="btn small" data-pa="ollama-add-found" data-url="${esc(f.url)}">Add</button></li>`).join("");
+    return `<section class="card provider" aria-labelledby="pv-ollama"><h3 id="pv-ollama">Ollama <small>local models</small></h3>
+      <p class="muted">Run open models on this machine or another one on your network. Claude Code and Codex sessions can use them.</p>
+      ${rows || found ? `<ul class="servers">${rows}${found}</ul>` : ""}
+      <form class="ollama-form" data-pf="ollama-add">
+        <label class="field"><span>Address</span><input type="text" id="ollama-url" placeholder="http://192.168.1.20:11434" value="${esc(ui.ollamaUrl)}" required></label>
+        <label class="field"><span>Name <small>(optional)</small></span><input type="text" id="ollama-name" maxlength="60" placeholder="Desktop GPU" value="${esc(ui.ollamaName)}"></label>
+        <div class="form-actions"><button class="btn primary" type="submit">Add server</button></div>
+      </form>${errLine("ollama-error")}</section>`;
+  }
+
+  function render() {
+    if (disposed || !data) return;
+    const focus = document.activeElement?.id;
+    root.innerHTML = `<div class="providers">${claudeCard(data.claude)}${codexCard(data.codex)}${ollamaCard(data.ollama)}</div>`;
+    if (focus && $(`#${focus}`, root)) $(`#${focus}`, root).focus();
+    schedule();
+  }
+
+  function schedule() {
+    clearTimeout(poll);
+    const x = data.codex;
+    const busy = ["downloading", "verifying", "unpacking"].includes(x.install?.state) || (x.login?.mode === "device" && x.login.running);
+    if (busy) poll = setTimeout(refreshCodex, 1500);
+  }
+
+  async function load() {
+    try {
+      data = await api("/api/providers");
+      if (ui.found === null) ui.found = (await api("/api/providers/ollama/discover")).found;
+      render();
+    } catch (ex) {
+      if (!disposed) root.innerHTML = `<p class="error">${esc(ex.message)}</p>`;
+    }
+  }
+
+  async function refreshCodex() {
+    try {
+      const before = data.codex;
+      data.codex = await api("/api/providers/codex");
+      if (before.install?.state !== "done" && data.codex.installed && !data.codex.linked && !data.codex.login) {
+        return act("codex-login");  // installed just now: go straight to sign-in
+      }
+      if (!before.linked && data.codex.linked) toast("ChatGPT linked");
+      render();
+    } catch { schedule(); }
+  }
+
+  function showErr(id, ex) { const el = $(`#${id}`, root); if (el) el.textContent = ex.message; }
+
+  async function act(what, el) {
+    if (ui.busy[what]) return;
+    ui.busy[what] = true;
+    try {
+      if (what === "claude-login") { data.claude.login = await api("/api/providers/claude/login", { method: "POST" }); }
+      else if (what === "claude-cancel") { await api("/api/providers/claude/cancel", { method: "POST" }); data.claude.login = null; ui.claudeCode = ""; }
+      else if (what === "claude-logout") { data.claude = await api("/api/providers/claude/logout", { method: "POST" }); }
+      else if (what === "codex-install") { data.codex.install = await api("/api/providers/codex/install", { method: "POST" }); if (data.codex.install.state === "done") return refreshCodex(); }
+      else if (what === "codex-login" || what === "codex-browser") {
+        data.codex.login = await api("/api/providers/codex/login", { method: "POST", body: { mode: what === "codex-browser" ? "browser" : "device" } });
+      }
+      else if (what === "codex-cancel") { await api("/api/providers/codex/cancel", { method: "POST" }); data.codex.login = null; ui.codexUrl = ""; }
+      else if (what === "codex-logout") { data.codex = await api("/api/providers/codex/logout", { method: "POST" }); }
+      else if (what === "codex-copy") { try { await navigator.clipboard.writeText($("#codex-code", root).textContent); toast("Code copied"); } catch { /* select it instead */ } return; }
+      else if (what === "ollama-remove") { await api(`/api/providers/ollama/${el.dataset.id}`, { method: "DELETE" }); data.ollama = await api("/api/providers/ollama"); }
+      else if (what === "ollama-add-found") {
+        await api("/api/providers/ollama", { method: "POST", body: { url: el.dataset.url } });
+        ui.found = ui.found.filter((f) => f.url !== el.dataset.url);
+        data.ollama = await api("/api/providers/ollama");
+      }
+      render();
+    } catch (ex) {
+      showErr(what.split("-")[0] + "-error", ex);
+    } finally { ui.busy[what] = false; }
+  }
+
+  async function submit(what) {
+    try {
+      if (what === "claude-code") {
+        ui.claudeCode = $("#claude-code", root).value;
+        $("#claude-error", root).textContent = "Checking the code…";
+        data.claude = await api("/api/providers/claude/code", { method: "POST", body: { code: ui.claudeCode } });
+        ui.claudeCode = "";
+        toast("Claude linked");
+      } else if (what === "codex-callback") {
+        ui.codexUrl = $("#codex-url", root).value;
+        $("#codex-error", root).textContent = "Finishing sign-in…";
+        data.codex = await api("/api/providers/codex/callback", { method: "POST", body: { url: ui.codexUrl } });
+        ui.codexUrl = "";
+        toast("ChatGPT linked");
+      } else if (what === "ollama-add") {
+        ui.ollamaUrl = $("#ollama-url", root).value;
+        ui.ollamaName = $("#ollama-name", root).value;
+        const t = await api("/api/providers/ollama/test", { method: "POST", body: { url: ui.ollamaUrl } });
+        if (!t.ok) throw new Error(t.error);
+        await api("/api/providers/ollama", { method: "POST", body: { url: ui.ollamaUrl, name: ui.ollamaName } });
+        ui.ollamaUrl = ui.ollamaName = "";
+        ui.found = (ui.found || []).filter((f) => f.url !== t.url);
+        data.ollama = await api("/api/providers/ollama");
+        toast(`Added Ollama with ${t.models.length} model${t.models.length === 1 ? "" : "s"}`);
+      }
+      render();
+    } catch (ex) {
+      showErr(what.split("-")[0] + "-error", ex);
+    }
+  }
+
+  root.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-pa]");
+    if (b) { e.preventDefault(); act(b.dataset.pa, b); }
+  });
+  root.addEventListener("submit", (e) => {
+    const f = e.target.closest("[data-pf]");
+    if (f) { e.preventDefault(); submit(f.dataset.pf); }
+  });
+  root.innerHTML = `<p class="muted">Checking what's linked…</p>`;
+  load();
+  return { dispose() { disposed = true; clearTimeout(poll); } };
+}
+
+/* ---------------- welcome (first run) ---------------- */
+
+function welcomeView() {
+  setMain(`${topbar("Welcome")}<div class="scroll"><div class="page welcome">
+    <ol class="wizard" aria-label="Setup steps"><li class="done">Account</li><li class="on" aria-current="step">Connect AI</li><li>Start working</li></ol>
+    <div class="page-head"><div><h1>Connect your AI</h1>
+      <p class="muted">Link the services you want to use in sessions. You can skip any of them and come back in Settings.</p></div></div>
+    <div id="welcome-providers"></div>
+    <div class="welcome-foot"><button class="btn primary" id="welcome-done">Finish setup</button></div>
+  </div></div>`);
+  const cards = providerCards($("#welcome-providers"));
+  $("#welcome-done").addEventListener("click", async () => {
+    await api("/api/onboarding/done", { method: "POST" }).catch(() => {});
+    state.me.onboarding = false;
+    location.hash = "#/";
+  });
+  return cards;
+}
+
 /* ---------------- settings ---------------- */
 
 function settingsView() {
   setMain(`${topbar("Settings")}<div class="scroll"><div class="page settings" id="settings">
     <div class="page-head"><h1>Settings</h1></div><p class="muted">Loading…</p></div></div>`);
   let disposed = false;
+  let cards = null;
 
   function render(a) {
     const since = a.created ? new Date(a.created * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
@@ -474,7 +708,11 @@ function settingsView() {
           <div><b>Sign out everywhere</b><p class="muted">Signs out every device except this one.</p></div>
           <button class="btn" id="signout-all" type="button">Sign out other devices</button>
         </div>
-      </section>`;
+      </section>
+      <h2 class="section-title" id="ai-h">AI providers</h2>
+      <div id="settings-providers" aria-labelledby="ai-h"></div>`;
+    cards?.dispose();
+    cards = providerCards($("#settings-providers"));
 
     $("#pw-form").addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -515,7 +753,7 @@ function settingsView() {
     }
   }
   load();
-  return { dispose() { disposed = true; } };
+  return { dispose() { disposed = true; cards?.dispose(); } };
 }
 
 /* ---------------- dashboard ---------------- */
@@ -1154,7 +1392,8 @@ async function boot() {
   $("#app").hidden = false;
   await loadPlugins();
   startPolling();
-  route();
+  if (state.me.onboarding && location.hash !== "#/welcome") location.hash = "#/welcome";
+  else route();
 }
 
 boot();

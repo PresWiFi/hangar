@@ -22,6 +22,7 @@ It also has a dashboard with your Claude plan usage and token activity.
 - **Claude can install what it needs.** In Docker, Claude can `sudo apt-get install` missing tools. You get a permission prompt for every sudo command, even in auto mode, and installed packages come back after the container is recreated.
 - **File uploads.** Each session has a **Files** tab for its folder: upload by button or drag and drop, browse subfolders, and download what Claude made. In the terminal, **+ Attach** (or dropping a file on it) uploads into the session folder and types `@file` into Claude's prompt, so you can add a question before sending.
 - **Pins, archive, renames, and private notes** for each session.
+- **Connect your AI without API keys.** Sign in with your Claude subscription, link ChatGPT through OpenAI's Codex CLI (Hangar installs it for you), and add Ollama servers on this machine or your network. All from the browser, during setup or later in Settings.
 
 | Session terminal | Transcript | Phone |
 |---|---|---|
@@ -29,7 +30,7 @@ It also has a dashboard with your Claude plan usage and token activity.
 
 ## Quick start (Docker)
 
-You need Docker with Compose, and Claude Code signed in on the host (`claude`, then `/login`). Hangar reuses that login.
+You need Docker with Compose.
 
 ```bash
 git clone https://github.com/PresWiFi/hangar.git
@@ -40,11 +41,14 @@ docker compose up -d --build
 docker compose logs hangar     # shows the one-time setup code
 ```
 
-Open `http://<this-machine>:7878`, enter the setup code, and create the owner account. Hangar has one account, and only someone who can read its log can create it.
+Open `http://<this-machine>:7878`, enter the setup code, and create the owner account. Hangar has one account, and only someone who can read its log can create it. Next, link your AI services (see [Connecting AI](#connecting-ai)).
 
 Forgot the password? Run `docker exec -it hangar python -m hangar reset-password`. It prints a new one and signs every device out.
 
-**Upgrading from a version with a password only:** nothing to do. Hangar creates the owner account `admin` with your `HANGAR_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
+**Upgrading from an earlier version:**
+
+- Hangar creates the owner account `admin` with your `HANGAR_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
+- Hangar now keeps its own Claude login by default instead of using the host's `~/.claude`. To keep sharing the host's login and history, add `CLAUDE_DIR=/home/you/.claude` to `.env` (the path the old default pointed at) before you run `docker compose up -d --build`.
 
 To stop it, run `docker compose down`. Your conversations stay in `~/.claude` and can be resumed later. Run `docker compose up -d` to start it again.
 
@@ -52,7 +56,7 @@ To update Claude Code inside the image: `docker compose build --no-cache && dock
 
 ### Windows (Docker Desktop + WSL)
 
-Run Hangar from your WSL distro, not PowerShell, so it shares the same `~/.claude` and paths as Claude Code in WSL:
+Run Hangar from your WSL distro, not PowerShell, so its paths match Claude Code in WSL (and, with `CLAUDE_DIR`, it can share the same `~/.claude`):
 
 1. In Docker Desktop, open **Settings > Resources > WSL integration** and turn it on for your distro.
 2. In WSL, set `WORKSPACE` to the path WSL uses, for example `/mnt/c/Users/you/code`.
@@ -72,6 +76,23 @@ docker compose -f docker-compose.yml -f docker-compose.tailscale.yml up -d --bui
 ```
 
 Turn on HTTPS certificates for your tailnet first (admin console > DNS). If you only want to reach Hangar over Tailscale, set `HANGAR_BIND=127.0.0.1` so the plain port isn't open on your network.
+
+## Connecting AI
+
+After setup, Hangar asks which AI services to link. You can skip any of them and come back in **Settings** (⚙ in the sidebar).
+
+**Claude.** Click **Sign in with Claude**, sign in on claude.ai, and paste the code it shows back into Hangar. This uses your Pro or Max subscription, like `claude /login`; there's no API key. The login is stored in Hangar's Claude folder (`CLAUDE_DIR`).
+
+**ChatGPT (Codex).** Hangar runs OpenAI's [Codex CLI](https://github.com/openai/codex) for ChatGPT. It isn't in the image: the first time you pick ChatGPT, Hangar downloads a pinned Codex release from GitHub (about 163 MB), checks its SHA-256, and installs it in Hangar's data volume, so it survives rebuilds. Then you sign in with a device code:
+
+1. In ChatGPT, open **Settings > Security** and turn on **device code sign-in** for Codex. You only do this once.
+2. Open the link Hangar shows and enter the code.
+
+If you can't use device codes, choose **Use browser sign-in instead**. After you sign in, your browser lands on a `localhost:1455` page that doesn't load. That's expected: copy that page's address and paste it into Hangar, which finishes the sign-in. The login is stored in `CODEX_HOME` (`~/.codex` in the container's home volume).
+
+Codex's own command sandbox can't work inside Docker (it needs user namespaces), so in Hangar Codex relies on the container as its boundary and keeps asking before it runs commands, the same footing as Claude Code.
+
+**Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
 
 ## How sessions work
 
@@ -113,7 +134,9 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 | `HANGAR_WORKSPACES` | home folder | Comma-separated folders that new sessions can start in. |
 | `HANGAR_PORT` / `HANGAR_HOST` | `7878` / `0.0.0.0` | Where the server listens. |
 | `HANGAR_DATA_DIR` | `~/.local/share/hangar` (`/data` in Docker) | Hangar's database (including the owner account) and cookie secret. |
-| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. |
+| `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. In Docker, set `CLAUDE_DIR` in `.env` instead to choose what's mounted there (default: Hangar's own `hangar-claude` volume). |
+| `CODEX_HOME` | `~/.codex` | Codex CLI's folder (login, config, session logs). |
+| `HANGAR_CODEX_DOWNLOAD_BASE` | GitHub releases | Mirror or local folder (`file:///...`) to install Codex from. The SHA-256 check still applies. |
 | `HANGAR_AUTORESTORE` | `false` (`true` in compose) | Resume the sessions that were running when Hangar last stopped. |
 | `HANGAR_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
 | `ALLOW_SUDO` (build) | `true` | Docker only: give Claude sudo, with a permission prompt for each sudo command. |
@@ -136,7 +159,9 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - New sessions, uploads, and downloads are limited to `HANGAR_WORKSPACES`. Downloaded files are served with a sandbox policy, so an uploaded HTML file can't run scripts as Hangar.
 - A terminal can still `cd` anywhere the container can see, so only mount what you need.
 - In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
-- Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it.
+- Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it. It reads Codex's `auth.json` only to show which account is linked.
+- Codex is downloaded from a pinned GitHub release and installed only if its SHA-256 matches the one built into Hangar.
+- The Codex browser fallback only accepts `http://localhost:1455/auth/callback` addresses, so it can't be used to make Hangar request anything else.
 
 ## Notes and limits
 
