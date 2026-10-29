@@ -384,10 +384,13 @@ function route() {
   hideTip();
   const h = location.hash || "#/";
   let m;
-  if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
+  const plugin = pluginRoutes.find((r) => r.pattern.test(h));
+  if (plugin) state.view = plugin.view(h.match(plugin.pattern));
+  else if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
   else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
   else state.view = dashboardView();
   renderSidebar();
+  renderSideNav();
 }
 window.addEventListener("hashchange", route);
 
@@ -986,6 +989,42 @@ async function openNewSession() {
   });
 }
 
+/* ---------------- plugins ---------------- */
+
+// Optional plugins (HANGAR_PLUGINS) add a sidebar link, a script, and hash routes through window.hangar.
+const pluginRoutes = [];
+window.hangar = {
+  api, esc, toast, fmt, state, topbar, setMain, toggleSide, loadSessions,
+  registerRoute(pattern, view) { pluginRoutes.push({ pattern, view }); },
+};
+
+function renderSideNav() {
+  const nav = $("#side-nav");
+  const links = (state.me?.plugins || []).filter((p) => p.nav);
+  nav.hidden = !links.length;
+  nav.innerHTML = links.map((p) => {
+    const active = location.hash === p.nav.href || location.hash.startsWith(p.nav.href + "/");
+    return `<a class="side-link${active ? " active" : ""}" href="${esc(p.nav.href)}">${esc(p.nav.label)}</a>`;
+  }).join("");
+}
+$("#side-nav").addEventListener("click", (e) => { if (e.target.closest("a")) toggleSide(false); });
+
+const loadedPlugins = new Set();
+async function loadPlugins() {
+  await Promise.all((state.me?.plugins || []).filter((p) => !loadedPlugins.has(p.name)).map((p) => {
+    loadedPlugins.add(p.name);
+    if (p.style) document.head.insertAdjacentHTML("beforeend", `<link rel="stylesheet" href="${esc(p.style)}">`);
+    if (!p.script) return null;
+    return new Promise((resolve) => {
+      const el = document.createElement("script");
+      el.src = p.script;
+      el.onload = resolve;
+      el.onerror = () => { toast(`Couldn't load the ${p.name} plugin`); resolve(); };
+      document.body.appendChild(el);
+    });
+  }));
+}
+
 /* ---------------- boot ---------------- */
 
 async function boot() {
@@ -994,6 +1033,7 @@ async function boot() {
   } catch { return; }
   $("#login").hidden = true;
   $("#app").hidden = false;
+  await loadPlugins();
   startPolling();
   route();
 }

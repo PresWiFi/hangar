@@ -11,6 +11,7 @@ from pathlib import Path
 
 import psutil
 
+from . import plugins
 from .config import settings
 from .sessions import live_claude_processes
 from .store import kv_get, kv_set
@@ -141,14 +142,15 @@ def dismiss_restore() -> None:
 
 def claude_command(extra: list[str]) -> str:
     """Shell command that runs Claude and then leaves a shell behind, so the session stays usable."""
-    args = shlex.split(settings.claude_base_args) + shlex.split(settings.claude_args) + extra
+    args = shlex.split(settings.claude_base_args) + plugins.claude_args() + shlex.split(settings.claude_args) + extra
     claude = " ".join([shlex.quote(settings.claude_cmd)] + [shlex.quote(a) for a in args])
     note = "Claude exited. This is a shell in the same folder. Type exit to close the session."
     return f"{claude}; printf '\\n\\033[2m%s\\033[0m\\n' {shlex.quote(note)}; exec \"${{SHELL:-/bin/bash}}\" -l"
 
 
 def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: bool = False,
-                model: str = "", permission_mode: str = "", shell_only: bool = False) -> dict:
+                model: str = "", permission_mode: str = "", shell_only: bool = False, prompt: str = "") -> dict:
+    """Start Claude (or a plain shell) in a new tmux session. `prompt` is sent as the opening message."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         raise TmuxError(f"Folder not found: {cwd}")
@@ -165,6 +167,8 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         extra += ["--model", model]
     if permission_mode:
         extra += ["--permission-mode", permission_mode]
+    if prompt:
+        extra += ["--", prompt]  # "--" so options that take several values can't swallow the prompt
 
     if shell_only:
         claude_id = ""
