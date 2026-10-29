@@ -202,9 +202,14 @@ def _oidc_redirect(url: str, state: str, request: Request) -> RedirectResponse:
 
 
 @app.get("/api/auth/oidc/start")
-async def oidc_start(request: Request):
+async def oidc_start(request: Request, here: str = ""):
     if not oidc.ready():
         return _to_app(request, oidc_error="Sign-in with a provider isn't set up.")
+    home = _origin_of(oidc.config().get("redirect_uri", ""))
+    if home and home != _origin(request) and not here:  # `here` stops a loop if a proxy hides the real address
+        # The provider sends people back to the registered address, so start there (that's where the
+        # state cookie must be, and where the sign-in cookie should end up).
+        return RedirectResponse(f"{home}/api/auth/oidc/start?here=1", status_code=303)
     if not auth.allow_attempt(_ip(request)):
         return _to_app(request, oidc_error="Too many attempts. Wait a few minutes.")
     try:
@@ -251,11 +256,24 @@ async def oidc_callback(request: Request, state: str = "", code: str = "", error
 
 @app.get("/api/oidc")
 async def oidc_get(request: Request):
-    return {**oidc.public_config(), "suggested_redirect_uri": f"{_origin(request)}/api/auth/oidc/callback"}
+    return {**oidc.public_config(), "suggested_redirect_uri": f"{_origin(request)}/api/auth/oidc/callback",
+            "current_origin": _origin(request), "public_url": settings.public_url or None}
 
 
 def _origin(request: Request) -> str:
-    return f"{request.url.scheme}://{request.headers.get('host') or request.url.netloc}"
+    """Hangar's address as the browser sees it: HANGAR_PUBLIC_URL, else what a reverse proxy forwarded
+    (Tailscale serve, Caddy, nginx), else the Host header."""
+    if settings.public_url:
+        return settings.public_url
+    first = lambda v: (v or "").split(",")[0].strip()  # noqa: E731
+    host = first(request.headers.get("x-forwarded-host")) or request.headers.get("host") or request.url.netloc
+    scheme = first(request.headers.get("x-forwarded-proto")) or request.url.scheme
+    return f"{scheme}://{host}"
+
+
+def _origin_of(url: str) -> str:
+    u = urlparse(url or "")
+    return f"{u.scheme}://{u.netloc}"
 
 
 class OIDCIn(BaseModel):

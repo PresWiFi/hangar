@@ -491,3 +491,4 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .sso .linked { margin: 10px 0 0; }
 .sso-form { margin: 14px 0; max-width: 680px; }
 #sso-redirect { font: 12.5px var(--mono); }
+.hint.warn { color: var(--critical-ink); }

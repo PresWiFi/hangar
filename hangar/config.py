@@ -36,6 +36,7 @@ class Settings:
     usage_poll_minutes: float = 5
     secure_cookies: bool = False      # set when served over HTTPS only
     max_upload_mb: int = 512
+    public_url: str = ""              # address people open Hangar at, e.g. https://hangar.example.ts.net (SSO redirect)
     plugins: list[str] = field(default_factory=list)  # optional plugins to turn on, e.g. ["ideas"]
 
     @classmethod
@@ -58,6 +59,7 @@ class Settings:
         s.usage_poll_minutes = max(1.0, float(e.get("HANGAR_USAGE_POLL_MINUTES", s.usage_poll_minutes)))
         s.secure_cookies = _bool(e.get("HANGAR_SECURE_COOKIES"))
         s.max_upload_mb = max(1, int(e.get("HANGAR_MAX_UPLOAD_MB") or s.max_upload_mb))
+        s.public_url = (e.get("HANGAR_PUBLIC_URL") or "").strip().rstrip("/")
         s.plugins = [p.lower() for p in _list(e.get("HANGAR_PLUGINS", ""))]
         s.data_dir.mkdir(parents=True, exist_ok=True)
         return s

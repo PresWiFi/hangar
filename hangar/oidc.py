@@ -110,9 +110,15 @@ def save(preset: str, issuer: str, client_id: str, client_secret: str | None, re
         raise OIDCError("Fill in the parts of the issuer shown in <angle brackets>.")
     if not client_id:
         raise OIDCError("Enter the client ID.")
-    u = urllib.parse.urlsplit(redirect_uri or "")
-    if u.scheme not in ("http", "https") or not u.netloc or u.path != "/api/auth/oidc/callback":
-        raise OIDCError("Bad redirect address.")
+    redirect_uri = (redirect_uri or "").strip()
+    if redirect_uri and "://" not in redirect_uri:
+        redirect_uri = "http://" + redirect_uri
+    u = urllib.parse.urlsplit(redirect_uri)
+    if u.path in ("", "/"):  # just the address; add the callback path
+        redirect_uri = f"{u.scheme}://{u.netloc}/api/auth/oidc/callback"
+        u = urllib.parse.urlsplit(redirect_uri)
+    if u.scheme not in ("http", "https") or not u.hostname or u.path != "/api/auth/oidc/callback" or u.query:
+        raise OIDCError("The redirect URI must look like https://<Hangar's address>/api/auth/oidc/callback.")
     disc = discover(issuer, fresh=True)  # fails loudly if the issuer is wrong
     old = config()
     same_provider = old.get("issuer") == issuer and old.get("client_id") == client_id
