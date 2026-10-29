@@ -50,7 +50,7 @@ def test_hash_roundtrip_and_salted():
 # ---------- setup ----------
 
 def test_fresh_install_needs_setup(fresh):
-    assert fresh.get("/api/auth/state").json() == {"setup": True, "username_hint": None}
+    assert fresh.get("/api/auth/state").json() == {"setup": True, "username_hint": None, "password": True, "oidc": None}
     assert fresh.get("/api/sessions").status_code == 401
     assert fresh.post("/api/login", json={"username": "admin", "password": PW}).status_code == 409
 
@@ -103,7 +103,7 @@ def test_startup_lines_show_code(fresh):
 # ---------- sign-in ----------
 
 def test_login_with_username(anon):
-    assert anon.get("/api/auth/state").json() == {"setup": False, "username_hint": "admin"}
+    assert anon.get("/api/auth/state").json() == {"setup": False, "username_hint": "admin", "password": True, "oidc": None}
     r = anon.post("/api/login", json={"username": "ADMIN", "password": PW})
     assert r.status_code == 200
     assert signed_in(anon)

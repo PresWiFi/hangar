@@ -2,6 +2,7 @@
 
     python -m hangar                    start the server
     python -m hangar reset-password     give the owner a new random password (signs every device out)
+                                        and turn password sign-in back on
 """
 import argparse
 import secrets
@@ -37,6 +38,10 @@ def reset_password(username: str | None) -> None:
             sys.exit(str(e))
     password = secrets.token_urlsafe(12)
     auth.set_password(password)
+    from . import oidc
+    if not oidc.password_login_enabled():
+        oidc.set_password_login(True)
+        print("Password sign-in was turned off; it's on again.")
     print(f"Username: {auth.owner()['username']}")
     print(f"Password: {password}")
     print("Every device is signed out. Change this password in Settings after you sign in.")

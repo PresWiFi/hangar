@@ -479,3 +479,15 @@ a.icon-btn { text-decoration: none; display: inline-grid; place-items: center; }
 .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 1px; }
 .s-meta .tag { color: var(--text); font-weight: 500; }
 #nf-agent-note:empty, #nf-mode-note:empty { display: none; }
+
+/* ---------- OIDC ---------- */
+.pw-fields { display: grid; gap: 10px; }
+.pw-fields[hidden] { display: none; }
+.pw-fields label { font-weight: 600; margin-top: 6px; }
+.or { display: flex; align-items: center; gap: 10px; color: var(--text-3); font-size: 12px; }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
+.btn.wide { width: 100%; justify-content: center; text-align: center; }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; }
+.sso .linked { margin: 10px 0 0; }
+.sso-form { margin: 14px 0; max-width: 680px; }
+#sso-redirect { font: 12.5px var(--mono); }

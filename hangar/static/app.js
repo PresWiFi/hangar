@@ -155,9 +155,30 @@ async function showLogin() {
     setTimeout(() => $("#setup-code").focus(), 50);
     return;
   }
+  const sso = $("#oidc-login");
+  sso.hidden = !st.oidc;
+  if (st.oidc) sso.textContent = `Sign in with ${st.oidc.label}`;
+  const pw = st.password !== false;
+  $("#pw-fields").hidden = !pw;
+  $("#login-or").hidden = !(st.oidc && pw);
+  $("#login-submit").classList.toggle("primary", !st.oidc);
+  for (const el of $("#pw-fields").querySelectorAll("input")) el.required = pw;
+  const flash = takeQuery("oidc_error");
+  if (flash) $("#login-error").textContent = flash;
+  if (!pw) { setTimeout(() => sso.focus(), 50); return; }
   const user = $("#login-username");
   if (!user.value && st.username_hint) user.value = st.username_hint;
   setTimeout(() => (user.value ? $("#login-password") : user).focus(), 50);
+}
+
+/* Reads ?name=value left by a redirect (OIDC sign-in) and removes it from the address bar. */
+function takeQuery(name) {
+  const q = new URLSearchParams(location.search);
+  const v = q.get(name);
+  if (v === null) return null;
+  q.delete(name);
+  history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q : "") + location.hash);
+  return v;
 }
 
 $("#login-form").addEventListener("submit", async (e) => {
@@ -653,6 +674,86 @@ function providerCards(root) {
   return { dispose() { disposed = true; clearTimeout(poll); } };
 }
 
+/* ---------------- sign in with an OIDC provider (settings) ---------------- */
+
+async function ssoCard(root) {
+  let c;
+  try { c = await api("/api/oidc"); } catch (ex) { root.innerHTML = `<p class="error">${esc(ex.message)}</p>`; return; }
+  const redirect = c.redirect_uri || c.suggested_redirect_uri;
+  const preset = (k) => c.presets[k] || c.presets.generic;
+  const linked = c.linked;
+  root.innerHTML = `<section class="card settings-card sso">
+    <p class="muted">Sign in with Authentik, Microsoft, Google, Keycloak, Duo, or any OpenID Connect provider.
+      Hangar still has one owner: you link your own identity at the provider, and only that identity can sign in.</p>
+    ${linked ? `<p class="linked"><span class="ok-mark" aria-hidden="true">✓</span> Linked to <b>${esc(linked.email || linked.name || linked.sub)}</b>
+        <span class="muted">at ${esc(linked.iss)}</span></p>` : ""}
+    <form id="sso-form" class="form-stack sso-form">
+      <div class="row2">
+        <label class="field"><span>Provider</span><select id="sso-preset">${Object.entries(c.presets).map(([k, p]) =>
+          `<option value="${k}"${k === c.preset ? " selected" : ""}>${esc(k === "generic" ? "Other (OpenID Connect)" : p.label)}</option>`).join("")}</select></label>
+        <label class="field"><span>Button text <small>(optional)</small></span><input type="text" id="sso-label" maxlength="40" value="${esc(c.configured ? c.label : "")}" placeholder="${esc(preset(c.preset).label)}"></label>
+      </div>
+      <p class="hint" id="sso-help">${esc(preset(c.preset).help)}</p>
+      <label class="field"><span>Issuer URL</span><input type="url" id="sso-issuer" required spellcheck="false" value="${esc(c.issuer)}" placeholder="${esc(preset(c.preset).issuer)}"></label>
+      <div class="row2">
+        <label class="field"><span>Client ID</span><input type="text" id="sso-client" required spellcheck="false" autocomplete="off" value="${esc(c.client_id)}"></label>
+        <label class="field"><span>Client secret ${c.has_secret ? "<small>(saved; leave empty to keep)</small>" : ""}</span>
+          <input type="password" id="sso-secret" autocomplete="new-password" spellcheck="false"></label>
+      </div>
+      <div class="field"><span>Redirect URI <small>(add this at the provider)</small></span>
+        <div class="inline-form"><input type="text" id="sso-redirect" readonly value="${esc(redirect)}">
+          <button class="btn" type="button" id="sso-copy">Copy</button></div>
+        ${c.redirect_uri && c.redirect_uri !== c.suggested_redirect_uri ? `<p class="hint">You're on a different address now (${esc(c.suggested_redirect_uri)}). Save again to use it.</p>` : ""}
+      </div>
+      <div class="form-actions"><button class="btn${c.configured ? "" : " primary"}" type="submit">Save</button>
+        ${c.configured ? `<a class="btn primary" href="/api/oidc/link">${linked ? "Link again" : `Link with ${esc(c.label)}`}</a>` : ""}
+        ${c.configured ? `<button class="btn ghost" type="button" id="sso-remove">Remove</button>` : ""}</div>
+      <p class="error" id="sso-error" role="alert"></p>
+    </form>
+    ${linked ? `<div class="settings-row">
+      <div><b>Password sign-in</b><p class="muted">${c.password_login ? "On. You can sign in with your username and password, or with " + esc(c.label) + "."
+        : "Off. Only " + esc(c.label) + " can sign in. If you get locked out, run <code>python -m hangar reset-password</code> on the server."}</p></div>
+      <button class="btn" type="button" id="sso-pw">${c.password_login ? "Turn off password sign-in" : "Turn password sign-in back on"}</button></div>
+      <div class="settings-row"><div><b>Unlink</b><p class="muted">Stops ${esc(c.label)} sign-in and turns password sign-in back on.</p></div>
+      <button class="btn" type="button" id="sso-unlink">Unlink</button></div>` : ""}
+  </section>`;
+
+  $("#sso-preset", root).addEventListener("change", (e) => {
+    const p = preset(e.target.value);
+    $("#sso-help", root).textContent = p.help;
+    $("#sso-issuer", root).placeholder = p.issuer;
+    $("#sso-label", root).placeholder = p.label;
+  });
+  $("#sso-copy", root).addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("#sso-redirect", root).value); toast("Copied"); } catch { $("#sso-redirect", root).select(); }
+  });
+  $("#sso-form", root).addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#sso-error", root).textContent = "Checking the provider…";
+    try {
+      await api("/api/oidc", { method: "PUT", body: { preset: $("#sso-preset", root).value, issuer: $("#sso-issuer", root).value,
+        client_id: $("#sso-client", root).value, client_secret: $("#sso-secret", root).value || null,
+        redirect_uri: c.suggested_redirect_uri, label: $("#sso-label", root).value } });
+      toast("Saved. Now link your identity.");
+      ssoCard(root);
+    } catch (ex) { $("#sso-error", root).textContent = ex.message; }
+  });
+  $("#sso-remove", root)?.addEventListener("click", async () => {
+    if (!confirm("Remove the sign-in provider? Password sign-in will be the only way in.")) return;
+    await api("/api/oidc", { method: "DELETE" }).catch((ex) => toast(ex.message));
+    ssoCard(root);
+  });
+  $("#sso-pw", root)?.addEventListener("click", async () => {
+    if (c.password_login && !confirm(`Turn off password sign-in? You'll only be able to sign in with ${c.label}.`)) return;
+    try { await api("/api/oidc/password-login", { method: "POST", body: { enabled: !c.password_login } }); ssoCard(root); }
+    catch (ex) { toast(ex.message); }
+  });
+  $("#sso-unlink", root)?.addEventListener("click", async () => {
+    await api("/api/oidc/unlink", { method: "POST" }).catch((ex) => toast(ex.message));
+    ssoCard(root);
+  });
+}
+
 /* ---------------- welcome (first run) ---------------- */
 
 function welcomeView() {
@@ -717,8 +818,11 @@ function settingsView() {
           <button class="btn" id="signout-all" type="button">Sign out other devices</button>
         </div>
       </section>
+      <h2 class="section-title" id="sso-h">Sign-in</h2>
+      <div id="settings-sso" aria-labelledby="sso-h"></div>
       <h2 class="section-title" id="ai-h">AI providers</h2>
       <div id="settings-providers" aria-labelledby="ai-h"></div>`;
+    ssoCard($("#settings-sso"));
     cards?.dispose();
     cards = providerCards($("#settings-providers"));
 
@@ -1480,6 +1584,9 @@ async function boot() {
   } catch { return; }
   $("#login").hidden = true;
   $("#app").hidden = false;
+  if (takeQuery("oidc") === "linked") toast("Sign-in provider linked");
+  const err = takeQuery("oidc_error");
+  if (err) toast(err, 6000);
   await loadPlugins();
   startPolling();
   if (state.me.onboarding && location.hash !== "#/welcome") location.hash = "#/welcome";

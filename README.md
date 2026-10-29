@@ -97,6 +97,18 @@ Codex's own command sandbox can't work inside Docker (it needs user namespaces).
 
 **Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
 
+## Sign in with SSO
+
+Hangar can use an OpenID Connect provider for sign-in: Authentik, Microsoft Entra ID, Google, Keycloak, Duo, or any other. It still has one owner; you link your own identity at the provider, and only that identity can sign in.
+
+1. In **Settings > Sign-in**, pick the provider. Copy the **Redirect URI** Hangar shows (`https://<your-hangar>/api/auth/oidc/callback`).
+2. At the provider, create an OIDC client (confidential, authorization code) with that redirect URI. Copy its issuer URL, client ID, and client secret into Hangar and click **Save**. Hangar checks `<issuer>/.well-known/openid-configuration` right away.
+3. Click **Link with …** and sign in at the provider. Hangar records that identity (issuer + subject).
+
+The sign-in page then shows **Sign in with …** next to the password form. Once that works, you can turn password sign-in off in Settings. If you lose access to the provider, `docker exec -it hangar python -m hangar reset-password` sets a new password and turns password sign-in back on.
+
+The redirect URI is the address you open Hangar at. If you use more than one (LAN and Tailscale), pick the one you'll use for SSO and save from there; behind HTTPS (the Tailscale sidecar or a reverse proxy), set `HANGAR_SECURE_COOKIES=true`.
+
 ## Agents and models
 
 **New session** lets you pick the agent and model:
@@ -169,6 +181,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 
 - There is one owner account. Its password is stored as a salted scrypt hash and must be at least 10 characters.
 - A fresh install can only be set up with the one-time code from Hangar's log, so someone else on the network can't claim it first.
+- SSO uses the authorization code flow with PKCE. The `state` is single-use, expires after 10 minutes, and must come back to the browser that started it; the ID token's signature (from the provider's published keys), issuer, audience, expiry, and nonce are all checked, and unsigned tokens are refused. Only the linked identity (issuer + subject) can sign in.
 - Sign-in and setup attempts are rate-limited (10 per 5 minutes per address) and the cookie is signed. Changing the password, or "Sign out other devices" in Settings, signs every other device out.
 - Don't forward the port to the internet. Use your LAN, Tailscale, or another VPN.
 - Every API request needs the login cookie, and requests that change anything also need a custom header, which blocks cross-site requests. Terminal WebSockets check the page origin.

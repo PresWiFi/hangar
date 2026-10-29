@@ -5,14 +5,14 @@ import asyncio
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import __version__, auth, files, plugins, store, tmux
+from . import __version__, auth, files, oidc, plugins, store, tmux
 from .providers.api import router as providers_router
 from .config import settings
 from .codex_sessions import codex_index
@@ -23,7 +23,7 @@ from .store import all_meta, set_meta
 from .usage import poller
 
 STATIC = Path(__file__).with_name("static")
-PUBLIC_API = {"/api/login", "/api/me", "/api/auth/state", "/api/setup"}
+PUBLIC_API = {"/api/login", "/api/me", "/api/auth/state", "/api/setup", "/api/auth/oidc/start", "/api/auth/oidc/callback"}
 
 
 @asynccontextmanager
@@ -119,7 +119,8 @@ def _signed_in(resp: JSONResponse, request: Request) -> JSONResponse:
 @app.get("/api/auth/state")
 async def auth_state():
     """What the sign-in screen should show. Public, so it must not reveal anything useful."""
-    return {"setup": auth.setup_needed(), "username_hint": auth.username_hint()}
+    return {"setup": auth.setup_needed(), "username_hint": auth.username_hint(),
+            "password": oidc.password_login_enabled(), "oidc": {"label": oidc.label()} if oidc.ready() else None}
 
 
 _setup_lock = asyncio.Lock()
@@ -163,6 +164,8 @@ class Login(BaseModel):
 async def login(body: Login, request: Request):
     if auth.setup_needed():
         raise HTTPException(409, "Hangar isn't set up yet.")
+    if not oidc.password_login_enabled():
+        raise HTTPException(403, f"Password sign-in is turned off. Use Sign in with {oidc.label()}.")
     if not auth.allow_attempt(_ip(request)):
         raise HTTPException(429, "Too many attempts. Wait a few minutes.")
     if not await asyncio.to_thread(auth.check_login, body.username, body.password):
@@ -176,6 +179,127 @@ async def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(auth.COOKIE)
     return resp
+
+
+# ---------- sign in with an OIDC provider ----------
+
+def _secure(request: Request) -> bool:
+    return settings.secure_cookies or request.url.scheme == "https"
+
+
+def _to_app(request: Request, fragment: str = "", **query) -> RedirectResponse:
+    resp = RedirectResponse("/" + ("?" + urlencode(query) if query else "") + fragment, status_code=303)
+    resp.delete_cookie(oidc.STATE_COOKIE, path="/api/auth/oidc")
+    return resp
+
+
+def _oidc_redirect(url: str, state: str, request: Request) -> RedirectResponse:
+    resp = RedirectResponse(url, status_code=303)
+    # Lax still sends it on the top-level redirect back from the provider.
+    resp.set_cookie(oidc.STATE_COOKIE, state, max_age=oidc.STATE_TTL, httponly=True, samesite="lax",
+                    secure=_secure(request), path="/api/auth/oidc")
+    return resp
+
+
+@app.get("/api/auth/oidc/start")
+async def oidc_start(request: Request):
+    if not oidc.ready():
+        return _to_app(request, oidc_error="Sign-in with a provider isn't set up.")
+    if not auth.allow_attempt(_ip(request)):
+        return _to_app(request, oidc_error="Too many attempts. Wait a few minutes.")
+    try:
+        url, state = await asyncio.to_thread(oidc.start, "login")
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e))
+    return _oidc_redirect(url, state, request)
+
+
+@app.get("/api/oidc/link")
+async def oidc_link_start(request: Request):
+    """Signed-in owner only (cookie). A GET so the browser can navigate to it; it changes nothing by itself."""
+    try:
+        url, state = await asyncio.to_thread(oidc.start, "link")
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e))
+    return _oidc_redirect(url, state, request)
+
+
+@app.get("/api/auth/oidc/callback")
+async def oidc_callback(request: Request, state: str = "", code: str = "", error: str = "",
+                        error_description: str = ""):
+    if error:
+        with oidc._lock:
+            oidc._pending.pop(state, None)
+        return _to_app(request, oidc_error=f"The provider said: {error_description or error}"[:300])
+    try:
+        mode, ident = await asyncio.to_thread(oidc.finish, state, request.cookies.get(oidc.STATE_COOKIE), code)
+    except oidc.OIDCError as e:
+        return _to_app(request, oidc_error=str(e)[:300])
+    if mode == "link":
+        if not _authed(request):  # linking needs the owner already signed in, in this browser
+            return _to_app(request, oidc_error="Sign in to Hangar first, then link from Settings.")
+        oidc.link(ident)
+        return _to_app(request, fragment="#/settings", oidc="linked")
+    if not oidc.matches_linked(ident):
+        who = ident.get("email") or ident.get("name") or "that account"
+        return _to_app(request, oidc_error=f"{who} isn't the identity linked to this Hangar.")
+    resp = _to_app(request)
+    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True, samesite="lax",
+                    secure=_secure(request))
+    return resp
+
+
+@app.get("/api/oidc")
+async def oidc_get(request: Request):
+    return {**oidc.public_config(), "suggested_redirect_uri": f"{_origin(request)}/api/auth/oidc/callback"}
+
+
+def _origin(request: Request) -> str:
+    return f"{request.url.scheme}://{request.headers.get('host') or request.url.netloc}"
+
+
+class OIDCIn(BaseModel):
+    preset: str = "generic"
+    issuer: str
+    client_id: str
+    client_secret: str | None = None   # empty keeps the saved one
+    redirect_uri: str
+    label: str = ""
+
+
+@app.put("/api/oidc")
+async def oidc_put(body: OIDCIn):
+    try:
+        await asyncio.to_thread(oidc.save, body.preset, body.issuer, body.client_id, body.client_secret,
+                                body.redirect_uri, body.label)
+    except oidc.OIDCError as e:
+        _err(e)
+    return oidc.public_config()
+
+
+class PasswordLoginIn(BaseModel):
+    enabled: bool
+
+
+@app.post("/api/oidc/password-login")
+async def oidc_password_login(body: PasswordLoginIn):
+    try:
+        oidc.set_password_login(body.enabled)
+    except oidc.OIDCError as e:
+        _err(e)
+    return oidc.public_config()
+
+
+@app.post("/api/oidc/unlink")
+async def oidc_unlink():
+    oidc.unlink()
+    return oidc.public_config()
+
+
+@app.delete("/api/oidc")
+async def oidc_delete():
+    oidc.remove()
+    return oidc.public_config()
 
 
 # ---------- account ----------
