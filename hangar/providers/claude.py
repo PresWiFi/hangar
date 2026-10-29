@@ -25,24 +25,41 @@ def _env() -> dict[str, str]:
     return clean_env({"CLAUDE_CONFIG_DIR": str(settings.claude_dir)})
 
 
+def _credentials() -> dict:
+    """The subscription login Claude Code keeps in its folder (the same file the usage card reads)."""
+    try:
+        data = json.loads((settings.claude_dir / ".credentials.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    oauth = data.get("claudeAiOauth") if isinstance(data, dict) else None
+    return oauth if isinstance(oauth, dict) and oauth.get("accessToken") else {}
+
+
 def status(fresh: bool = False) -> dict:
-    """{'linked': bool, 'email', 'plan', 'org', 'method', 'folder', 'login': {...} | None}"""
+    """{'linked': bool, 'email', 'plan', 'org', 'method', 'folder', 'login': {...} | None}
+
+    Linked means Claude Code's credentials file has a subscription login. `claude auth status` adds the
+    account details; if it fails, the file still decides."""
     global _cache
     if not fresh and _cache and time.time() - _cache[0] < 15:
         out = dict(_cache[1])
     else:
-        out = {"linked": False, "folder": str(settings.claude_dir)}
+        creds = _credentials()
+        out = {"linked": bool(creds), "folder": str(settings.claude_dir), "plan": creds.get("subscriptionType")}
         try:
             r = subprocess.run([settings.claude_cmd, "auth", "status", "--json"], capture_output=True, text=True,
-                               timeout=20, env=_env())
-            data = json.loads(r.stdout or "{}")
-            out.update({"linked": bool(data.get("loggedIn")), "email": data.get("email"),
-                        "plan": data.get("subscriptionType"), "org": data.get("orgName"),
+                               timeout=60, env=_env())
+            text = r.stdout or ""
+            data = json.loads(text[text.index("{"):]) if "{" in text else {}
+            out.update({"linked": bool(data.get("loggedIn")) or out["linked"], "email": data.get("email"),
+                        "plan": data.get("subscriptionType") or out["plan"], "org": data.get("orgName"),
                         "method": data.get("authMethod")})
+            if not data:
+                out["status_output"] = (text + r.stderr).strip()[-300:]
         except FileNotFoundError:
             out["error"] = f"Claude Code isn't installed ({settings.claude_cmd} not found)."
         except (subprocess.TimeoutExpired, ValueError) as e:
-            out["error"] = f"Couldn't read Claude's sign-in status: {e}"
+            out["status_output"] = f"claude auth status failed: {e}"
         _cache = (time.time(), dict(out))
     out["login"] = _flow_state()
     return out
@@ -81,11 +98,21 @@ def submit_code(code: str) -> dict:
         _flow.write(code + "\r")
         _flow.wait(90)
         output = _flow.text
-        _cache = None
-        st = status(fresh=True)
+        said_ok = _flow.exit_code == 0 or bool(re.search(r"login successful", output, re.I))
+        st = {"linked": False}
+        for _ in range(5 if said_ok else 1):  # give the CLI a moment to finish writing its files
+            _cache = None
+            st = status(fresh=True)
+            if st["linked"]:
+                break
+            time.sleep(2)
         cancel_login()  # finished or failed, this attempt's link can't be used again
         if st["linked"]:
             return status()
+        if said_ok:
+            raise RuntimeError(
+                f"Claude Code says the sign-in worked, but Hangar can't find the login in {settings.claude_dir}. "
+                f"Details: {st.get('status_output') or st.get('error') or 'claude auth status reports signed out'}")
         raise RuntimeError(explain(output))
 
 

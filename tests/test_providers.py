@@ -68,6 +68,41 @@ def test_claude_wrong_code(fake_claude, client):
     assert "Invalid code" in r.json()["detail"]
 
 
+@pytest.fixture
+def claude_says_ok(tmp_path, monkeypatch):
+    """Like the real CLI after a good code: prints Login successful, exits 0; `auth status` says signed out."""
+    exe = script(tmp_path / "claude", """
+        if [ "$1 $2" = "auth status" ]; then echo '{"loggedIn": false}'
+        elif [ "$1 $2" = "auth login" ]; then
+          echo "If the browser didn't open, visit: https://claude.com/cai/oauth/authorize?code=true&state=y"
+          printf "Paste code here if prompted > "; read -r code; echo "Login successful."
+        fi
+    """)
+    monkeypatch.setattr(settings, "claude_cmd", exe)
+    monkeypatch.setattr(settings, "claude_dir", tmp_path / "claude-home")
+    (tmp_path / "claude-home").mkdir()
+    monkeypatch.setattr(claude.time, "sleep", lambda s: None)
+    claude._cache = None
+    yield tmp_path / "claude-home"
+    claude.cancel_login()
+    claude._cache = None
+
+
+def test_claude_linked_by_credentials_file(claude_says_ok, client):
+    (claude_says_ok / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "x", "subscriptionType": "max"}}))
+    client.post("/api/providers/claude/login")
+    r = client.post("/api/providers/claude/code", json={"code": "GOOD"})
+    assert r.status_code == 200 and r.json()["linked"] and r.json()["plan"] == "max"
+
+
+def test_claude_success_but_no_login_found(claude_says_ok, client):
+    client.post("/api/providers/claude/login")
+    r = client.post("/api/providers/claude/code", json={"code": "GOOD"})
+    assert r.status_code == 409
+    assert "says the sign-in worked, but Hangar can't find the login in" in r.json()["detail"]
+    assert str(claude_says_ok) in r.json()["detail"]
+
+
 def test_claude_failure_clears_attempt(fake_claude, client):
     client.post("/api/providers/claude/login")
     client.post("/api/providers/claude/code", json={"code": "BAD"})
