@@ -35,11 +35,16 @@ You need Docker with Compose, and Claude Code signed in on the host (`claude`, t
 git clone https://github.com/PresWiFi/hangar.git
 cd hangar
 cp .env.example .env
-# Edit .env: set WORKSPACE to your projects folder and HANGAR_PASSWORD to something long.
+# Edit .env: set WORKSPACE to your projects folder.
 docker compose up -d --build
+docker compose logs hangar     # shows the one-time setup code
 ```
 
-Open `http://<this-machine>:7878` and sign in.
+Open `http://<this-machine>:7878`, enter the setup code, and create the owner account. Hangar has one account, and only someone who can read its log can create it.
+
+Forgot the password? Run `docker exec -it hangar python -m hangar reset-password`. It prints a new one and signs every device out.
+
+**Upgrading from a version with a password only:** nothing to do. Hangar creates the owner account `admin` with your `HANGAR_PASSWORD` (or the password it generated before). Sign in as `admin`, then rename the account in Settings if you like.
 
 To stop it, run `docker compose down`. Your conversations stay in `~/.claude` and can be resumed later. Run `docker compose up -d` to start it again.
 
@@ -95,7 +100,7 @@ Needs Linux or macOS (or WSL), Python 3.10+, tmux, and Claude Code.
 ```bash
 python3 -m venv ~/.local/share/hangar-venv
 ~/.local/share/hangar-venv/bin/pip install -r requirements.txt
-HANGAR_WORKSPACES=~/code HANGAR_PASSWORD='long-password' ~/.local/share/hangar-venv/bin/python -m hangar
+HANGAR_WORKSPACES=~/code ~/.local/share/hangar-venv/bin/python -m hangar   # setup code is printed here
 ```
 
 Sessions then run in your own tmux server, with all your tools, and you can attach to them with `tmux attach -t hg-...`.
@@ -104,10 +109,10 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 
 | Variable | Default | What it does |
 |---|---|---|
-| `HANGAR_PASSWORD` | generated | Web UI password. If empty, Hangar generates one, saves it to `<data>/password`, and prints where it is at startup. |
+| `HANGAR_PASSWORD` | empty | Optional. Skips the setup page and creates the owner account `admin` with this password. If you change it later, Hangar updates the password on its next start. Leave empty to use the setup page. |
 | `HANGAR_WORKSPACES` | home folder | Comma-separated folders that new sessions can start in. |
 | `HANGAR_PORT` / `HANGAR_HOST` | `7878` / `0.0.0.0` | Where the server listens. |
-| `HANGAR_DATA_DIR` | `~/.local/share/hangar` (`/data` in Docker) | Hangar's database, cookie secret, and generated password. |
+| `HANGAR_DATA_DIR` | `~/.local/share/hangar` (`/data` in Docker) | Hangar's database (including the owner account) and cookie secret. |
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Claude Code's folder. |
 | `HANGAR_AUTORESTORE` | `false` (`true` in compose) | Resume the sessions that were running when Hangar last stopped. |
 | `HANGAR_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
@@ -123,7 +128,9 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 
 Hangar gives whoever signs in a shell on your machine, with Claude Code and your Claude login. Treat the password like an SSH key.
 
-- Use a long password. Logins are rate-limited (10 attempts per 5 minutes per address) and the cookie is signed. Changing the password signs everyone out.
+- There is one owner account. Its password is stored as a salted scrypt hash and must be at least 10 characters.
+- A fresh install can only be set up with the one-time code from Hangar's log, so someone else on the network can't claim it first.
+- Sign-in and setup attempts are rate-limited (10 per 5 minutes per address) and the cookie is signed. Changing the password, or "Sign out other devices" in Settings, signs every other device out.
 - Don't forward the port to the internet. Use your LAN, Tailscale, or another VPN.
 - Every API request needs the login cookie, and requests that change anything also need a custom header, which blocks cross-site requests. Terminal WebSockets check the page origin.
 - New sessions, uploads, and downloads are limited to `HANGAR_WORKSPACES`. Downloaded files are served with a sandbox policy, so an uploaded HTML file can't run scripts as Hangar.
@@ -142,7 +149,8 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 The backend is FastAPI (`hangar/app.py`), with modules for tmux (`tmux.py`), session logs (`sessions.py`), usage (`usage.py`), and the terminal bridge (`terminal.py`). The front end is plain JavaScript with no build step (`hangar/static/`). xterm.js, marked, and DOMPurify are vendored in `hangar/static/vendor`, so the UI works offline.
 
 ```bash
-HANGAR_PASSWORD=dev HANGAR_PORT=7979 python -m hangar
+HANGAR_PASSWORD=dev-password HANGAR_PORT=7979 python -m hangar   # sign in as admin
+python -m pytest -q                                              # tests (needs requirements-dev.txt)
 ```
 
 ## Credits

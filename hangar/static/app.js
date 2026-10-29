@@ -25,7 +25,7 @@ async function api(path, opts = {}) {
     init.body = JSON.stringify(opts.body);
   }
   const res = await fetch(path, init);
-  if (res.status === 401 && path !== "/api/login") {
+  if (res.status === 401 && !["/api/login", "/api/setup", "/api/account/password", "/api/account/username"].includes(path)) {
     showLogin();
     throw new Error("Sign in required");
   }
@@ -143,22 +143,52 @@ function level(p) {
 
 /* ---------------- auth ---------------- */
 
-function showLogin() {
+async function showLogin() {
   $("#app").hidden = true;
   $("#login").hidden = false;
   stopPolling();
-  setTimeout(() => $("#login-password").focus(), 50);
+  let st = { setup: false, username_hint: null };
+  try { st = await (await fetch("/api/auth/state", { credentials: "same-origin" })).json(); } catch {}
+  $("#setup-form").hidden = !st.setup;
+  $("#login-form").hidden = st.setup;
+  if (st.setup) {
+    setTimeout(() => $("#setup-code").focus(), 50);
+    return;
+  }
+  const user = $("#login-username");
+  if (!user.value && st.username_hint) user.value = st.username_hint;
+  setTimeout(() => (user.value ? $("#login-password") : user).focus(), 50);
 }
 
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#login-error").textContent = "";
   try {
-    await api("/api/login", { method: "POST", body: { password: $("#login-password").value } });
+    await api("/api/login", { method: "POST", body: { username: $("#login-username").value, password: $("#login-password").value } });
     $("#login-password").value = "";
     boot();
   } catch (err) {
     $("#login-error").textContent = err.message;
+    if (/set up/.test(err.message)) showLogin();
+  }
+});
+
+$("#setup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const err = $("#setup-error");
+  err.textContent = "";
+  if ($("#setup-password").value !== $("#setup-confirm").value) {
+    err.textContent = "The passwords don't match.";
+    return;
+  }
+  try {
+    await api("/api/setup", { method: "POST", body: { code: $("#setup-code").value, username: $("#setup-username").value,
+      password: $("#setup-password").value } });
+    for (const id of ["#setup-code", "#setup-password", "#setup-confirm"]) $(id).value = "";
+    boot();
+  } catch (ex) {
+    err.textContent = ex.message;
+    if (/already set up/.test(ex.message)) showLogin();
   }
 });
 
@@ -269,7 +299,8 @@ function renderSideFoot() {
     ${pick.map((l) => meter(l.key === "five_hour" ? "Session" : "Weekly", l.utilization, `${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
     ${o.error && !pick.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
     <div class="foot-row"><span title="Host">${esc(state.me?.hostname || "")}</span>
-      <span><button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
+      <span><a class="icon-btn" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
+      <button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
       <button class="icon-btn" data-act="logout" title="Sign out" aria-label="Sign out">⎋</button></span></div>`;
 }
 
@@ -388,6 +419,7 @@ function route() {
   if (plugin) state.view = plugin.view(h.match(plugin.pattern));
   else if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
   else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
+  else if (h === "#/settings") state.view = settingsView();
   else state.view = dashboardView();
   renderSidebar();
   renderSideNav();
@@ -397,6 +429,93 @@ window.addEventListener("hashchange", route);
 function topbar(title) {
   return `<div class="topbar"><button class="icon-btn" data-act="menu" aria-label="Open menu">☰</button>
     <span class="t">${esc(title)}</span><button class="icon-btn" data-act="new" aria-label="New session">+</button></div>`;
+}
+
+/* ---------------- settings ---------------- */
+
+function settingsView() {
+  setMain(`${topbar("Settings")}<div class="scroll"><div class="page settings" id="settings">
+    <div class="page-head"><h1>Settings</h1></div><p class="muted">Loading…</p></div></div>`);
+  let disposed = false;
+
+  function render(a) {
+    const since = a.created ? new Date(a.created * 1000).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "";
+    const envNote = a.env_password
+      ? `<p class="note">HANGAR_PASSWORD is set in Hangar's environment. A password you set here stays until you change
+         HANGAR_PASSWORD; after that, Hangar switches to the new value the next time it starts.</p>` : "";
+    $("#settings").innerHTML = `
+      <div class="page-head"><h1>Settings</h1></div>
+      <section class="card settings-card" aria-labelledby="acct-h">
+        <h2 id="acct-h">Account</h2>
+        <p>Signed in as <b>${esc(a.username)}</b>${since ? ` <span class="muted">· owner since ${esc(since)}</span>` : ""}</p>
+        ${envNote}
+        <div class="settings-forms">
+          <form id="pw-form" class="form-stack">
+            <h3>Change password</h3>
+            <input type="text" autocomplete="username" value="${esc(a.username)}" hidden aria-hidden="true">
+            <label class="field"><span>Current password</span><input type="password" id="pw-current" autocomplete="current-password" required></label>
+            <label class="field"><span>New password <small>(at least ${a.min_password} characters)</small></span>
+              <input type="password" id="pw-new" autocomplete="new-password" minlength="${a.min_password}" required></label>
+            <label class="field"><span>Confirm new password</span><input type="password" id="pw-confirm" autocomplete="new-password" required></label>
+            <div class="form-actions"><button class="btn primary" type="submit">Change password</button></div>
+            <p class="hint">Signs out every other device.</p>
+            <p class="error" id="pw-error" role="alert"></p>
+          </form>
+          <form id="name-form" class="form-stack">
+            <h3>Change username</h3>
+            <label class="field"><span>New username</span>
+              <input type="text" id="name-new" autocomplete="username" autocapitalize="none" spellcheck="false" value="${esc(a.username)}" required></label>
+            <label class="field"><span>Password</span><input type="password" id="name-pw" autocomplete="current-password" required></label>
+            <div class="form-actions"><button class="btn primary" type="submit">Save username</button></div>
+            <p class="error" id="name-error" role="alert"></p>
+          </form>
+        </div>
+        <div class="settings-row">
+          <div><b>Sign out everywhere</b><p class="muted">Signs out every device except this one.</p></div>
+          <button class="btn" id="signout-all" type="button">Sign out other devices</button>
+        </div>
+      </section>`;
+
+    $("#pw-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = $("#pw-error");
+      err.textContent = "";
+      if ($("#pw-new").value !== $("#pw-confirm").value) { err.textContent = "The new passwords don't match."; return; }
+      try {
+        await api("/api/account/password", { method: "POST", body: { current: $("#pw-current").value, new: $("#pw-new").value } });
+        e.target.reset();
+        toast("Password changed. Other devices are signed out.");
+      } catch (ex) { err.textContent = ex.message; }
+    });
+    $("#name-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const err = $("#name-error");
+      err.textContent = "";
+      try {
+        const r = await api("/api/account/username", { method: "POST", body: { username: $("#name-new").value, password: $("#name-pw").value } });
+        state.me.user = r.username;
+        toast(`Username is now ${r.username}`);
+        load();
+      } catch (ex) { err.textContent = ex.message; }
+    });
+    $("#signout-all").addEventListener("click", async () => {
+      try {
+        await api("/api/account/signout-all", { method: "POST" });
+        toast("Other devices are signed out.");
+      } catch (ex) { toast(ex.message); }
+    });
+  }
+
+  async function load() {
+    try {
+      const a = await api("/api/account");
+      if (!disposed) render(a);
+    } catch (ex) {
+      if (!disposed) $("#settings").innerHTML = `<div class="page-head"><h1>Settings</h1></div><p class="error">${esc(ex.message)}</p>`;
+    }
+  }
+  load();
+  return { dispose() { disposed = true; } };
 }
 
 /* ---------------- dashboard ---------------- */

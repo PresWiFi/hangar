@@ -1,4 +1,4 @@
-# Copy .env.example to .env and set WORKSPACE and HANGAR_PASSWORD first.
+# Copy .env.example to .env and set WORKSPACE first. The setup code is in `docker compose logs hangar`.
 #   docker compose up -d --build     start
 #   docker compose down              stop (conversations stay resumable)
 services:

@@ -19,7 +19,7 @@ from .store import all_meta, set_meta
 from .usage import poller
 
 STATIC = Path(__file__).with_name("static")
-PUBLIC_API = {"/api/login", "/api/me"}
+PUBLIC_API = {"/api/login", "/api/me", "/api/auth/state", "/api/setup"}
 
 
 @asynccontextmanager
@@ -35,8 +35,9 @@ async def lifespan(app: FastAPI):
         if started:
             print(f"Restored {len(started)} session(s)", flush=True)
     tracker = asyncio.create_task(_track_open_sessions())  # keep a reference so it is not garbage-collected
-    print(f"Hangar {__version__} on http://{settings.host}:{settings.port}  (password: {auth.password_source()})",
-          flush=True)
+    print(f"Hangar {__version__} on http://{settings.host}:{settings.port}", flush=True)
+    for line in auth.startup_lines():
+        print(line, flush=True)
     yield
     tracker.cancel()
 
@@ -95,22 +96,68 @@ def _err(e: Exception, code: int = 400):
 
 # ---------- auth ----------
 
+def _ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _signed_in(resp: JSONResponse, request: Request) -> JSONResponse:
+    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True, samesite="lax",
+                    secure=settings.secure_cookies or request.url.scheme == "https")
+    return resp
+
+
+@app.get("/api/auth/state")
+async def auth_state():
+    """What the sign-in screen should show. Public, so it must not reveal anything useful."""
+    return {"setup": auth.setup_needed(), "username_hint": auth.username_hint()}
+
+
+_setup_lock = asyncio.Lock()
+
+
+class Setup(BaseModel):
+    code: str
+    username: str
+    password: str
+
+
+@app.post("/api/setup")
+async def setup(body: Setup, request: Request):
+    if not auth.setup_needed():
+        raise HTTPException(409, "Hangar is already set up. Sign in instead.")
+    if not auth.allow_attempt(_ip(request)):
+        raise HTTPException(429, "Too many attempts. Wait a few minutes.")
+    if not auth.check_setup_code(body.code):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Wrong setup code. Check Hangar's log for the current one.")
+    try:
+        username = auth.check_username(body.username)
+        auth.check_new_password(body.password)
+    except ValueError as e:
+        _err(e)
+    async with _setup_lock:
+        if not auth.setup_needed():
+            raise HTTPException(409, "Hangar is already set up. Sign in instead.")
+        await asyncio.to_thread(auth.create_owner, username, body.password)
+    print(f'Setup done: owner account "{username}" created.', flush=True)
+    return _signed_in(JSONResponse({"ok": True}), request)
+
+
 class Login(BaseModel):
+    username: str
     password: str
 
 
 @app.post("/api/login")
 async def login(body: Login, request: Request):
-    ip = request.client.host if request.client else "?"
-    if not auth.allow_attempt(ip):
+    if auth.setup_needed():
+        raise HTTPException(409, "Hangar isn't set up yet.")
+    if not auth.allow_attempt(_ip(request)):
         raise HTTPException(429, "Too many attempts. Wait a few minutes.")
-    if not auth.check_password(body.password):
+    if not await asyncio.to_thread(auth.check_login, body.username, body.password):
         await asyncio.sleep(0.6)
-        raise HTTPException(401, "Wrong password")
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie(auth.COOKIE, auth.make_token(), max_age=auth.MAX_AGE, httponly=True, samesite="lax",
-                    secure=settings.secure_cookies or request.url.scheme == "https")
-    return resp
+        raise HTTPException(401, "Wrong username or password")
+    return _signed_in(JSONResponse({"ok": True}), request)
 
 
 @app.post("/api/logout")
@@ -120,11 +167,66 @@ async def logout():
     return resp
 
 
+# ---------- account ----------
+
+@app.get("/api/account")
+async def account():
+    o = auth.owner()
+    return {"username": o["username"], "created": o.get("created"), "source": o.get("source"),
+            "password_changed": o.get("password_changed"), "env_password": bool(settings.password),
+            "min_password": auth.MIN_PASSWORD}
+
+
+class PasswordChange(BaseModel):
+    current: str
+    new: str
+
+
+@app.post("/api/account/password")
+async def change_password(body: PasswordChange, request: Request):
+    o = auth.owner()
+    if not await asyncio.to_thread(auth.verify_password, body.current, o["pw_hash"]):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Current password is wrong")
+    try:
+        auth.check_new_password(body.new)
+    except ValueError as e:
+        _err(e)
+    await asyncio.to_thread(auth.set_password, body.new)
+    return _signed_in(JSONResponse({"ok": True}), request)  # other devices are now signed out
+
+
+class UsernameChange(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/api/account/username")
+async def change_username(body: UsernameChange):
+    o = auth.owner()
+    if not await asyncio.to_thread(auth.verify_password, body.password, o["pw_hash"]):
+        await asyncio.sleep(0.6)
+        raise HTTPException(401, "Password is wrong")
+    try:
+        username = auth.check_username(body.username)
+    except ValueError as e:
+        _err(e)
+    auth.set_username(username)
+    return {"ok": True, "username": username}
+
+
+@app.post("/api/account/signout-all")
+async def signout_all(request: Request):
+    auth.sign_out_everywhere()
+    return _signed_in(JSONResponse({"ok": True}), request)
+
+
 @app.get("/api/me")
 async def me(request: Request):
     if not _authed(request):
         return JSONResponse({"authed": False}, status_code=401)
-    return {"authed": True, "version": __version__, "hostname": settings.hostname, "workspaces": settings.workspaces,
+    return {"authed": True, "version": __version__, "hostname": settings.hostname, "user": auth.owner()["username"],
+            "workspaces": settings.workspaces,
             "claude_dir": str(settings.claude_dir), "tmux_socket": settings.tmux_socket or None,
             "plugins": [p.public() for p in PLUGINS]}
 
