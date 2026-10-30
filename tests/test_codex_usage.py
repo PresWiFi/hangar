@@ -135,3 +135,38 @@ def test_overview_reports_which_plans_are_linked(client, signed_in, monkeypatch,
     signed_in()
     (claude_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "x"}}))
     assert client.get("/api/overview").json()["linked"] == {"claude": True, "chatgpt": True}
+
+
+def test_poller_checks_soon_after_chatgpt_sign_in(tmp_path, monkeypatch):
+    """Hangar started before ChatGPT was linked: signing in must trigger a check, not wait out the interval."""
+    import threading
+    monkeypatch.setattr(settings, "codex_home", tmp_path)
+    monkeypatch.setattr(settings, "usage_poll_minutes", 60)
+    monkeypatch.setattr(codex_usage, "fetch", lambda: {"as_of": time.time(), "plan": "free", "source": "live",
+                                                       "windows": [{"key": "primary", "used_percent": 0, "window_minutes": 43200, "resets_at": 1}]})
+    monkeypatch.setattr(codex_usage, "kv_set", lambda *a: None)
+    import hangar.usage as usage_mod
+    real = usage_mod.wait_or_login_change
+
+    def quick(wake, delay, login_file, failing):  # same logic, but look at the file every 0.1 s
+        start = usage_mod._mtime(login_file)
+        end = time.time() + delay
+        while time.time() < end:
+            if wake.wait(0.1):
+                break
+            if failing and usage_mod._mtime(login_file) != start:
+                break
+        wake.clear()
+    monkeypatch.setattr(codex_usage, "wait_or_login_change", quick)
+    p = codex_usage.CodexUsagePoller()
+    p.usage = None
+    threading.Thread(target=p._run, daemon=True).start()
+    time.sleep(0.3)
+    assert p.usage is None  # not signed in yet
+    b = base64.urlsafe_b64encode(json.dumps({"exp": time.time() + 3600}).encode()).decode().rstrip("=")
+    (tmp_path / "auth.json").write_text(json.dumps({"tokens": {"access_token": f"x.{b}.s"}}))
+    for _ in range(30):
+        if p.usage:
+            break
+        time.sleep(0.1)
+    assert p.usage and p.usage["plan"] == "free"
