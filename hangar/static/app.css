@@ -174,7 +174,7 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 .empty { color: var(--text-3); padding: 18px 8px; font-size: 13px; }
 
 .side-foot { border-top: 1px solid var(--border); padding: 10px 6px 12px; display: grid; gap: 8px; font-size: 12px; }
-.mini-meter { display: grid; grid-template-columns: 86px 1fr 38px; align-items: center; gap: 8px; color: var(--text-2); }
+.mini-meter { display: grid; grid-template-columns: 30px 1fr 38px; align-items: center; gap: 8px; color: var(--text-2); }
 .mini-meter .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
 .bar { height: 6px; border-radius: 99px; background: var(--surface-3); overflow: hidden; }
 .bar > i { display: block; height: 100%; border-radius: 99px; background: var(--series-1); min-width: 2px; }
@@ -492,3 +492,8 @@ a.btn { text-decoration: none; display: inline-flex; align-items: center; }
 .sso-form { margin: 14px 0; max-width: 680px; }
 #sso-redirect { font: 12.5px var(--mono); }
 .hint.warn { color: var(--critical-ink); }
+
+/* ---------- usage sections (sidebar) ---------- */
+.usage-sec { display: grid; gap: 5px; }
+.usage-sec + .usage-sec { margin-top: 4px; }
+.usage-h { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--text-3); }

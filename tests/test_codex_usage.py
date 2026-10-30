@@ -125,3 +125,13 @@ def test_wait_ignores_login_file_when_healthy(tmp_path):
     started = time.time()
     wait_or_login_change(wake, 30, f, failing=False)
     assert time.time() - started < 5  # woken by refresh_now, not by the timer running out
+
+
+def test_overview_reports_which_plans_are_linked(client, signed_in, monkeypatch, tmp_path):
+    claude_dir = tmp_path / "claude"
+    claude_dir.mkdir()
+    monkeypatch.setattr(settings, "claude_dir", claude_dir)
+    assert client.get("/api/overview").json()["linked"] == {"claude": False, "chatgpt": False}
+    signed_in()
+    (claude_dir / ".credentials.json").write_text(json.dumps({"claudeAiOauth": {"accessToken": "x"}}))
+    assert client.get("/api/overview").json()["linked"] == {"claude": True, "chatgpt": True}
