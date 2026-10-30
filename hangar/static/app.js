@@ -375,7 +375,8 @@ function renderSideFoot() {
       l.utilization, `Claude ${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
     ${gpt.map((w) => meter(`ChatGPT ${windowShort(w.window_minutes)}`, w.used_percent,
       `ChatGPT ${windowLong(w.window_minutes).toLowerCase()}: resets in ${fmt.until(isoFromUnix(w.resets_at))}`)).join("")}
-    ${o.error && !pick.length && !gpt.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
+    ${o.error && !pick.length ? `<div class="dim" title="${esc(o.error)}">Claude usage unavailable</div>` : ""}
+    ${o.codex_usage_error && !gpt.length ? `<div class="dim" title="${esc(o.codex_usage_error)}">ChatGPT usage unavailable</div>` : ""}
     <div class="foot-row"><span title="Host">${esc(state.me?.hostname || "")}</span>
       <span><a class="icon-btn" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
       <button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
@@ -1058,8 +1059,11 @@ function dashboardView() {
       <div class="grid">
         ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
         ${o ? activityCard(o.stats) : ""}
-        ${o?.codex_usage ? codexUsageCard(o.codex_usage, o.codex_usage_error) : ""}
-        ${o ? projectsCard(o.stats, !!o.codex_usage) : ""}
+        ${o?.codex_usage ? codexUsageCard(o.codex_usage, o.codex_usage_error)
+          : o?.codex_usage_error ? `<div class="card span-5"><h2><span>ChatGPT usage <small class="dim">via Codex</small></span>
+              <button class="btn small ghost" data-act="usage-refresh" title="Check now">↻</button></h2>
+              <p class="muted">${esc(o.codex_usage_error)}</p></div>` : ""}
+        ${o ? projectsCard(o.stats, !!(o.codex_usage || o.codex_usage_error)) : ""}
         ${o ? hoursCard(o.stats) : ""}
       </div>`;
     $("#usage-refresh")?.addEventListener("click", refreshUsage);

@@ -98,3 +98,30 @@ def test_overview_uses_poller(client, monkeypatch):
     monkeypatch.setattr(app_module.codex_poller, "error", None)
     o = client.get("/api/overview").json()
     assert o["codex_usage"]["plan"] == "pro" and o["codex_usage"]["source"] == "live"
+
+
+def test_wait_wakes_when_login_file_changes(tmp_path):
+    import threading
+    from hangar.usage import wait_or_login_change
+    f = tmp_path / "creds.json"
+    f.write_text("old")
+    wake = threading.Event()
+    t = threading.Timer(0.3, lambda: (f.write_text("new token"), __import__("os").utime(f, (time.time() + 5, time.time() + 5))))
+    t.start()
+    started = time.time()
+    real_wait = wake.wait
+    wake.wait = lambda timeout: real_wait(min(timeout, 0.2))  # check the file often in the test
+    wait_or_login_change(wake, 30, f, failing=True)
+    assert time.time() - started < 5
+
+
+def test_wait_ignores_login_file_when_healthy(tmp_path):
+    import threading
+    from hangar.usage import wait_or_login_change
+    f = tmp_path / "creds.json"
+    f.write_text("x")
+    wake = threading.Event()
+    threading.Timer(0.2, wake.set).start()
+    started = time.time()
+    wait_or_login_change(wake, 30, f, failing=False)
+    assert time.time() - started < 5  # woken by refresh_now, not by the timer running out

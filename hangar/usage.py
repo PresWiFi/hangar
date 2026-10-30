@@ -143,6 +143,26 @@ def fetch_status() -> dict:
     }
 
 
+def _mtime(path) -> float | None:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+def wait_or_login_change(wake: threading.Event, delay: float, login_file, failing: bool) -> None:
+    """Sleeps `delay` seconds, or less: a refresh request wakes it, and after a failure so does a change
+    to the login file (the CLI refreshed its token or someone signed in), so usage recovers right away."""
+    start = _mtime(login_file)
+    end = time.time() + delay
+    while (left := end - time.time()) > 0:
+        if wake.wait(min(left, 15 if failing else left)):
+            break
+        if failing and _mtime(login_file) != start:
+            break
+    wake.clear()
+
+
 class UsagePoller:
     """Polls usage in the background with backoff. The endpoint rate-limits after a few quick calls."""
 
@@ -186,8 +206,7 @@ class UsagePoller:
             except Exception as e:  # keep the thread alive no matter what
                 self.error = f"Unexpected error: {e}"
                 delay = interval
-            self._wake.wait(delay)
-            self._wake.clear()
+            wait_or_login_change(self._wake, delay, settings.claude_dir / ".credentials.json", bool(self.error))
 
     def _run_status(self) -> None:
         while True:
