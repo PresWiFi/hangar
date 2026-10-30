@@ -126,7 +126,7 @@ The redirect URI is filled in from the address in your browser, and you can edit
 - **Codex** with your ChatGPT plan, or with an Ollama model (no ChatGPT sign-in needed for that).
 - **Plain shell.**
 
-Codex sessions get the same treatment as Claude's: they're listed in the sidebar (tagged *Codex*), have a transcript with tool calls, show working/waiting status, can be resumed, forked, and restored after a restart. The dashboard's token activity counts both, and a **ChatGPT usage** card shows your Codex plan limits once Codex has reported them.
+Codex sessions get the same treatment as Claude's: they're listed in the sidebar (tagged *Codex*), have a transcript with tool calls, show working/waiting status, can be resumed, forked, and restored after a restart. The dashboard's token activity counts both, and a **ChatGPT usage** card shows your Codex plan limits (also in the sidebar, next to Claude's).
 
 Sessions on Ollama are tagged *Ollama*. Hangar remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
 
@@ -199,7 +199,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - New sessions, uploads, and downloads are limited to `HANGAR_WORKSPACES`. Downloaded files are served with a sandbox policy, so an uploaded HTML file can't run scripts as Hangar.
 - A terminal can still `cd` anywhere the container can see, so only mount what you need.
 - In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
-- Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it. It reads Codex's `auth.json` only to show which account is linked.
+- Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it. It reads Codex's `auth.json` to show which account is linked and to check ChatGPT usage the way Codex does; it never refreshes or changes the token.
 - Codex is downloaded from a pinned GitHub release and installed only if its SHA-256 matches the one built into Hangar.
 - The Codex browser fallback only accepts `http://localhost:1455/auth/callback` addresses, so it can't be used to make Hangar request anything else.
 
@@ -208,7 +208,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - The usage numbers come from the same unofficial endpoint Claude Code's `/usage` uses. It rate-limits fast polling, so Hangar checks every 5 minutes and backs off on errors. It only works with a Claude subscription login, not an API key.
 - The "cost" on a session is Claude Code's API-equivalent estimate, not what a subscription charges.
 - Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see. For Codex it comes from the turn events in its log.
-- The ChatGPT usage card only updates while you use Codex; Codex reports your limits with each reply, and Hangar doesn't call OpenAI on its own.
+- ChatGPT usage is checked every 5 minutes with the same request Codex's `/status` makes, using the token Codex saved. Hangar never refreshes that token; if it has expired, the card shows the limits from Codex's last reply until you use Codex again. The endpoint is unofficial, like Claude's.
 - Local models through Ollama are much weaker agents than Claude or GPT, and Claude Code features Ollama doesn't support (prompt caching, token counting) are skipped. The first message to a model that isn't loaded can take a minute.
 
 ## Development

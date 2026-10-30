@@ -49,6 +49,11 @@ function toast(msg, ms = 2600, action = null) {
   toast._t = setTimeout(() => (t.hidden = true), ms);
 }
 
+async function refreshUsage() {
+  await api("/api/usage/refresh", { method: "POST" }).catch(() => {});
+  toast("Checking usage…");
+}
+
 /* Copies text to the clipboard. The Clipboard API only exists on HTTPS and localhost, so on a plain
    http:// LAN address this falls back to the older copy command, which needs a recent click or key press.
    Returns true if it worked. */
@@ -289,6 +294,10 @@ function liveStatus(s) {
   return "shell";
 }
 const STATUS_TEXT = { busy: "Working", idle: "Waiting", shell: "Shell" };
+/* Codex limit windows come in minutes: 300 = 5 hours, 10080 = a week, 43200 = 30 days. */
+const windowShort = (m) => ({ 300: "5h", 10080: "7d", 43200: "30d" }[m] || (m ? (m % 1440 ? `${Math.round(m / 60)}h` : `${m / 1440}d`) : ""));
+const windowLong = (m) => ({ 300: "5-hour limit", 10080: "Weekly limit", 43200: "30-day limit" }[m] || (m ? `${windowShort(m)} limit` : "Limit"));
+const isoFromUnix = (t) => (t ? new Date(t * 1000).toISOString() : null);
 const agentName = (s) => (s.agent === "codex" ? "Codex" : "Claude");
 /* Short tag for the sidebar: which agent, and whether it runs on an Ollama model. */
 function agentTag(s) {
@@ -353,6 +362,8 @@ function renderSideFoot() {
   if (!o) return;
   const u = o.usage?.limits || [];
   const pick = ["five_hour", "seven_day"].map((k) => u.find((l) => l.key === k)).filter(Boolean);
+  const gpt = o.codex_usage?.windows || [];
+  const both = pick.length && gpt.length;
   const meter = (label, p, title) => {
     const lv = level(p ?? 0);
     return `<div class="mini-meter" title="${esc(title || "")}"><span>${esc(label)}</span>
@@ -360,8 +371,11 @@ function renderSideFoot() {
   };
   const theme = document.documentElement.dataset.theme || "auto";
   $("#side-foot").innerHTML = `
-    ${pick.map((l) => meter(l.key === "five_hour" ? "Session" : "Weekly", l.utilization, `${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
-    ${o.error && !pick.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
+    ${pick.map((l) => meter(both ? (l.key === "five_hour" ? "Claude 5h" : "Claude 7d") : (l.key === "five_hour" ? "Session" : "Weekly"),
+      l.utilization, `Claude ${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
+    ${gpt.map((w) => meter(`ChatGPT ${windowShort(w.window_minutes)}`, w.used_percent,
+      `ChatGPT ${windowLong(w.window_minutes).toLowerCase()}: resets in ${fmt.until(isoFromUnix(w.resets_at))}`)).join("")}
+    ${o.error && !pick.length && !gpt.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
     <div class="foot-row"><span title="Host">${esc(state.me?.hostname || "")}</span>
       <span><a class="icon-btn" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
       <button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
@@ -389,6 +403,8 @@ document.addEventListener("click", async (e) => {
   if (act === "logout") {
     await api("/api/logout", { method: "POST" }).catch(() => {});
     showLogin();
+  } else if (act === "usage-refresh") {
+    refreshUsage();
   } else if (act === "theme") {
     const order = ["auto", "light", "dark"];
     const cur = document.documentElement.dataset.theme || "auto";
@@ -957,22 +973,23 @@ function dashboardView() {
       ${meters}${extra}${o.error ? `<p class="dim" style="font-size:12px;margin:8px 0 0">${esc(o.error)}</p>` : ""}</div>`;
   }
 
-  function codexUsageCard(c) {
-    const label = (m) => ({ 300: "5-hour limit", 10080: "Weekly limit", 43200: "30-day limit" }[m] || (m ? `${Math.round(m / 60)}-hour limit` : "Limit"));
+  function codexUsageCard(c, err) {
     const meters = c.windows.map((w) => {
       const lv = level(w.used_percent);
-      const resets = w.resets_at ? new Date(w.resets_at * 1000).toISOString() : null;
+      const resets = isoFromUnix(w.resets_at);
       return `<div class="meter">
-        <div class="meter-top"><span>${esc(label(w.window_minutes))}</span><b>${fmt.pct(w.used_percent)}</b></div>
+        <div class="meter-top"><span>${esc(windowLong(w.window_minutes))}</span><b>${fmt.pct(w.used_percent)}</b></div>
         <div class="bar"><i class="${lv.cls}" style="width:${Math.min(100, w.used_percent)}%"></i></div>
         <div class="meter-sub"><span>${resets ? `Resets in ${fmt.until(resets)} · ${fmt.when(resets)}` : ""}</span>
           <span>${lv.label ? `<span class="status-tag ${lv.cls}"><span class="sw" style="background:var(--${lv.cls})"></span>${lv.label}</span>` : ""}</span></div>
       </div>`;
     }).join("");
     const plan = c.plan ? `<span class="badge">${esc(c.plan)}</span>` : "";
-    return `<div class="card span-5"><h2><span>ChatGPT usage <small class="dim">via Codex</small></span>${plan}</h2>
+    const when = c.source === "live" ? `Checked ${esc(fmt.ago(c.as_of))}.` : `From Codex's last reply, ${esc(fmt.ago(c.as_of))}.`;
+    return `<div class="card span-5"><h2><span>ChatGPT usage <small class="dim">via Codex</small></span><span>${plan}
+      <button class="btn small ghost" data-act="usage-refresh" title="Check now">↻</button></span></h2>
       ${meters || `<p class="muted">No limits reported.</p>`}
-      <p class="dim" style="font-size:12px;margin:8px 0 0">As of the last Codex reply, ${esc(fmt.ago(c.as_of))}. It updates while you use Codex.</p></div>`;
+      <p class="dim" style="font-size:12px;margin:8px 0 0">${when}${err ? ` ${esc(err)}` : ""}</p></div>`;
   }
 
   function activityCard(st) {
@@ -995,10 +1012,10 @@ function dashboardView() {
     </div>`;
   }
 
-  function projectsCard(st) {
+  function projectsCard(st, wide = false) {
     const max = Math.max(1, ...st.projects.map((p) => p.tokens));
     const models = st.today_models.length ? `<div class="dim" style="margin:14px 0 6px">Models today</div><div class="chips">${st.today_models.map(([m, n]) => `<span class="badge">${esc(m)} · ${fmt.tokens(n)}</span>`).join("")}</div>` : "";
-    return `<div class="card span-5"><h2>Projects, last 14 days</h2>
+    return `<div class="card ${wide ? "span-7" : "span-5"}"><h2>Projects, last 14 days</h2>
       <div class="list">${st.projects.map((p) => `<div class="list-row"><span class="name">${esc(p.name)}</span><span class="num">${fmt.tokens(p.tokens)}</span>
         <div class="hbar"><i style="width:${(p.tokens / max) * 100}%"></i></div></div>`).join("") || `<span class="dim">No activity yet.</span>`}</div>${models}</div>`;
   }
@@ -1041,11 +1058,11 @@ function dashboardView() {
       <div class="grid">
         ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
         ${o ? activityCard(o.stats) : ""}
-        ${o?.codex_usage ? codexUsageCard(o.codex_usage) : ""}
-        ${o ? projectsCard(o.stats) : ""}
+        ${o?.codex_usage ? codexUsageCard(o.codex_usage, o.codex_usage_error) : ""}
+        ${o ? projectsCard(o.stats, !!o.codex_usage) : ""}
         ${o ? hoursCard(o.stats) : ""}
       </div>`;
-    $("#usage-refresh")?.addEventListener("click", async () => { await api("/api/usage/refresh", { method: "POST" }); toast("Refreshing usage…"); });
+    $("#usage-refresh")?.addEventListener("click", refreshUsage);
   }
 
   render();
