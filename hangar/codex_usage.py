@@ -93,6 +93,7 @@ class CodexUsagePoller:
         self.error: str | None = None
         self._wake = threading.Event()
         self._failures = 0
+        self._logged_ok = False
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True, name="codex-usage").start()
@@ -107,22 +108,37 @@ class CodexUsagePoller:
             self._wake.clear()
         while True:
             delay = interval
-            if _auth():
+            signed_in = bool(_auth())
+            if signed_in:
                 try:
                     self.usage = fetch()
-                    self.error = None
+                    self._set_error(None)
                     self._failures = 0
                     kv_set("last_codex_usage", self.usage)
                 except CodexUsageError as e:
-                    self.error = str(e)
+                    self._set_error(str(e))
                     self._failures += 1
                     retry = getattr(e, "retry_after", None)
                     delay = min(3600, max(retry or 0, interval * 2 ** min(self._failures, 3)))
                 except Exception as e:  # keep the thread alive no matter what
-                    self.error = f"Unexpected error: {e}"
+                    self._set_error(f"Unexpected error: {e}")
             else:
-                self.error = None
-            wait_or_login_change(self._wake, delay, settings.codex_home / "auth.json", bool(self.error))
+                self._set_error(None)
+            # Not signed in yet, or failing: check again as soon as Codex's login file changes.
+            wait_or_login_change(self._wake, delay, settings.codex_home / "auth.json",
+                                 bool(self.error) or not signed_in)
+
+    def _set_error(self, error: str | None) -> None:
+        """Logs when the check starts working or stops, so `docker compose logs` shows what's going on."""
+        if error != self.error or (error is None and not self._logged_ok):
+            if error:
+                print(f"ChatGPT usage check failed: {error}", flush=True)
+            elif self.usage:
+                print("ChatGPT usage check working.", flush=True)
+                self._logged_ok = True
+        if error:
+            self._logged_ok = False
+        self.error = error
 
 
 def newest(live: dict | None, from_logs: dict | None) -> dict | None:

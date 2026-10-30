@@ -172,6 +172,7 @@ class UsagePoller:
         self.status: dict | None = None
         self._wake = threading.Event()
         self._failures = 0
+        self._logged_ok = False
 
     def start(self) -> None:
         threading.Thread(target=self._run, daemon=True, name="usage").start()
@@ -195,10 +196,16 @@ class UsagePoller:
             delay = interval
             try:
                 self.usage = fetch_usage()
+                if self.error or not self._logged_ok:
+                    print("Claude usage check working.", flush=True)
+                    self._logged_ok = True
                 self.error = None
                 self._failures = 0
                 kv_set("last_usage", self.usage)
             except UsageError as e:
+                if str(e) != self.error:
+                    print(f"Claude usage check failed: {e}", flush=True)
+                self._logged_ok = False
                 self.error = str(e)
                 self._failures += 1
                 retry = getattr(e, "retry_after", None)
