@@ -16,6 +16,7 @@ from . import __version__, auth, files, oidc, plugins, store, tmux
 from .providers.api import router as providers_router
 from .config import settings
 from .codex_sessions import codex_index
+from .codex_usage import codex_poller, newest as newest_codex_usage
 from .codex_sessions import transcript as codex_transcript
 from .providers import ollama as ollama_servers
 from .sessions import index, transcript
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
         if plugin.startup:
             await asyncio.to_thread(plugin.startup)
     poller.start()
+    codex_poller.start()
     await asyncio.to_thread(index.refresh, 0)
     await asyncio.to_thread(tmux.snapshot_for_restore)
     if settings.autorestore:
@@ -665,12 +667,14 @@ async def overview():
     codex_records, codex_usage = await asyncio.gather(asyncio.to_thread(codex_index.token_records),
                                                       asyncio.to_thread(codex_index.usage))
     stats = await asyncio.to_thread(index.stats, 14, codex_records)
-    return {**poller.snapshot(), "stats": stats, "codex_usage": codex_usage}
+    return {**poller.snapshot(), "stats": stats, "codex_usage": newest_codex_usage(codex_poller.usage, codex_usage),
+            "codex_usage_error": codex_poller.error}
 
 
 @app.post("/api/usage/refresh")
 async def usage_refresh():
     poller.refresh_now()
+    codex_poller.refresh_now()
     return {"ok": True}
 
 
