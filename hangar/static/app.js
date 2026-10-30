@@ -363,19 +363,22 @@ function renderSideFoot() {
   const u = o.usage?.limits || [];
   const pick = ["five_hour", "seven_day"].map((k) => u.find((l) => l.key === k)).filter(Boolean);
   const gpt = o.codex_usage?.windows || [];
-  const both = pick.length && gpt.length;
+  const linked = o.linked || { claude: !!pick.length, chatgpt: !!gpt.length };
   const meter = (label, p, title) => {
     const lv = level(p ?? 0);
     return `<div class="mini-meter" title="${esc(title || "")}"><span>${esc(label)}</span>
       <div class="bar"><i class="${lv.cls}" style="width:${Math.min(100, p || 0)}%"></i></div><span class="val">${fmt.pct(p)}</span></div>`;
   };
+  // One section per signed-in plan: a heading, its meters, or why they're missing (reason on hover).
+  const section = (name, meters, err) => `<div class="usage-sec"><div class="usage-h">${esc(name)}</div>
+    ${meters.length ? meters.join("") : `<div class="dim" title="${esc(err || "")}">${err ? "Usage unavailable" : "Checking…"}</div>`}</div>`;
   const theme = document.documentElement.dataset.theme || "auto";
   $("#side-foot").innerHTML = `
-    ${pick.map((l) => meter(both ? (l.key === "five_hour" ? "Claude 5h" : "Claude 7d") : (l.key === "five_hour" ? "Session" : "Weekly"),
-      l.utilization, `Claude ${l.label}: resets in ${fmt.until(l.resets_at)}`)).join("")}
-    ${gpt.map((w) => meter(`ChatGPT ${windowShort(w.window_minutes)}`, w.used_percent,
-      `ChatGPT ${windowLong(w.window_minutes).toLowerCase()}: resets in ${fmt.until(isoFromUnix(w.resets_at))}`)).join("")}
-    ${o.error && !pick.length && !gpt.length ? `<div class="dim" title="${esc(o.error)}">Usage unavailable</div>` : ""}
+    ${linked.claude ? section("Claude", pick.map((l) => meter(l.key === "five_hour" ? "5h" : "7d", l.utilization,
+        `Claude ${l.label}: resets in ${fmt.until(l.resets_at)}`)), o.error) : ""}
+    ${linked.chatgpt ? section("ChatGPT", gpt.map((w) => meter(windowShort(w.window_minutes), w.used_percent,
+        `ChatGPT ${windowLong(w.window_minutes).toLowerCase()}: resets in ${fmt.until(isoFromUnix(w.resets_at))}`)),
+        o.codex_usage_error) : ""}
     <div class="foot-row"><span title="Host">${esc(state.me?.hostname || "")}</span>
       <span><a class="icon-btn" href="#/settings" title="Settings" aria-label="Settings">⚙</a>
       <button class="icon-btn" data-act="theme" title="Theme: ${theme}" aria-label="Change theme">${theme === "dark" ? "☾" : theme === "light" ? "☀" : "◐"}</button>
@@ -1049,6 +1052,19 @@ function dashboardView() {
       return `<a class="run-card" href="${esc(sessionHref(s))}"><header><span class="t">${esc(s.title)}</span>
         <span class="badge"><span class="dot ${st}"></span>${STATUS_TEXT[st]}</span></header><pre>${esc(text)}</pre></a>`;
     }).join("");
+    // A usage card per signed-in plan; a pointer to Settings when none is.
+    const usage = [];
+    if (!o) usage.push(`<div class="card span-5"><h2>Usage</h2><p class="muted">Loading…</p></div>`);
+    else {
+      const linked = o.linked || { claude: true, chatgpt: !!o.codex_usage };
+      if (linked.claude) usage.push(usageCard(o));
+      if (linked.chatgpt) usage.push(o.codex_usage ? codexUsageCard(o.codex_usage, o.codex_usage_error)
+        : `<div class="card span-5"><h2><span>ChatGPT usage <small class="dim">via Codex</small></span>
+            <button class="btn small ghost" data-act="usage-refresh" title="Check now">↻</button></h2>
+            <p class="muted">${esc(o.codex_usage_error || "Checking…")}</p></div>`);
+      if (!usage.length) usage.push(`<div class="card span-5"><h2>Usage</h2>
+        <p class="muted">No Claude or ChatGPT plan is signed in. <a href="#/settings">Connect your AI in Settings</a> to see your limits here.</p></div>`);
+    }
     el.innerHTML = `
       <div class="page-head"><div><h1>${esc(state.me?.hostname || "Hangar")}</h1>
         <div class="muted">${running.length} running · ${state.sessions.filter((s) => !s.pending).length} sessions on record ${o ? "· " + statusLine(o) : ""}</div></div>
@@ -1056,10 +1072,10 @@ function dashboardView() {
       ${state.restorable && !running.length ? `<div class="notice"><span>${state.restorable} session${state.restorable > 1 ? "s were" : " was"} running when Hangar last stopped.</span><span><button class="btn small ghost" data-act="dismiss-restore">Dismiss</button> <button class="btn primary small" data-act="restore">Restore</button></span></div>` : ""}
       ${running.length ? `<div class="card" style="margin-bottom:14px"><h2>Running sessions</h2><div class="run-grid">${runCards}</div></div>` : ""}
       <div class="grid">
-        ${o ? usageCard(o) : `<div class="card span-5"><h2>Claude usage</h2><p class="muted">Loading…</p></div>`}
+        ${usage[0] || ""}
         ${o ? activityCard(o.stats) : ""}
-        ${o?.codex_usage ? codexUsageCard(o.codex_usage, o.codex_usage_error) : ""}
-        ${o ? projectsCard(o.stats, !!o.codex_usage) : ""}
+        ${usage[1] || ""}
+        ${o ? projectsCard(o.stats, usage.length > 1) : ""}
         ${o ? hoursCard(o.stats) : ""}
       </div>`;
     $("#usage-refresh")?.addEventListener("click", refreshUsage);

@@ -16,6 +16,7 @@ import urllib.request
 
 from .config import settings
 from .store import kv_get, kv_set
+from .usage import wait_or_login_change
 
 BASE_URL = "https://chatgpt.com/backend-api"
 
@@ -121,8 +122,7 @@ class CodexUsagePoller:
                     self.error = f"Unexpected error: {e}"
             else:
                 self.error = None
-            self._wake.wait(delay)
-            self._wake.clear()
+            wait_or_login_change(self._wake, delay, settings.codex_home / "auth.json", bool(self.error))
 
 
 def newest(live: dict | None, from_logs: dict | None) -> dict | None:
