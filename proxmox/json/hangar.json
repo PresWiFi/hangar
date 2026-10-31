@@ -1,0 +1,45 @@
+{
+  "name": "Hangar",
+  "slug": "hangar",
+  "categories": [
+    20
+  ],
+  "date_created": "2026-10-31",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": 7878,
+  "documentation": "https://github.com/PresWiFi/hangar#readme",
+  "website": "https://github.com/PresWiFi/hangar",
+  "repository": "https://github.com/PresWiFi/hangar",
+  "logo": "https://raw.githubusercontent.com/PresWiFi/hangar/main/hangar/static/icon.svg",
+  "description": "Hangar is a self-hosted web UI for Claude Code and Codex. Sessions run in tmux, so you can pick them up from any device, with readable transcripts, a plan-usage dashboard, and GitHub sign-in for cloning and pushing repos.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/hangar.sh",
+      "config_path": "/opt/hangar_data/hangar.env",
+      "resources": {
+        "cpu": 2,
+        "ram": 4096,
+        "hdd": 16,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "notes": [
+    {
+      "text": "On the first visit, enter the setup code from Hangar's log: journalctl -u hangar. Then create the owner account and sign in with Claude.",
+      "type": "info"
+    },
+    {
+      "text": "Agents run as root with Claude's bypass-permissions mode allowed, so they can change anything in the container. Keep it unprivileged and don't mount sensitive host paths.",
+      "type": "warning"
+    }
+  ]
+}
