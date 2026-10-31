@@ -32,6 +32,7 @@ When it qualifies:
 
 1. Fork DevScripts and copy `ct/hangar.sh`, `install/hangar-install.sh`, and `json/hangar.json` to the same paths.
 2. In `ct/hangar.sh`, set line 2 to `_CS_DEFAULT_URL="https://raw.githubusercontent.com/community-scripts/DevScripts/main"`.
+   Also remove the `_CS_FALLBACK_HEADER` banner lines; their generator makes the official header.
 3. Check the script against their current [AGENTS.md](https://github.com/community-scripts/DevScripts/blob/main/AGENTS.md) checklist; the rules change.
 4. Test on a real Proxmox host (fresh install and update), then open a "New Script" issue and a PR in DevScripts.
    Their PR template asks which AI model helped write the script.

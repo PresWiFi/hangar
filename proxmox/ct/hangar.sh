@@ -2,6 +2,13 @@
 _CS_DEFAULT_URL="https://raw.githubusercontent.com/PresWiFi/hangar/main/proxmox"
 _cs_boot="${COMMUNITY_SCRIPTS_CORE_DIR:-$(dirname "${BASH_SOURCE[0]}")/../../core}/core/build.func"
 source "$_cs_boot" 2>/dev/null || source <(curl -fsSL "${COMMUNITY_SCRIPTS_CORE_URL:-https://raw.githubusercontent.com/community-scripts/core/main}/core/build.func")
+# Hangar's banner until community-scripts generates one (drop this when submitting).
+_CS_FALLBACK_HEADER='    __  __
+   / / / /___ _____  ____ _____ ______
+  / /_/ / __ `/ __ \/ __ `/ __ `/ ___/
+ / __  / /_/ / / / / /_/ / /_/ / /
+/_/ /_/\__,_/_/ /_/\__, /\__,_/_/
+                  /____/'
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: PresWiFi
 # License: MIT | https://github.com/community-scripts/DevScripts/raw/main/LICENSE
