@@ -517,11 +517,11 @@ function topbar(title) {
 
 /* ---------------- AI providers (welcome page + settings) ---------------- */
 
-/* Renders the Claude, ChatGPT, and Ollama cards into `root`. Returns { dispose }. */
+/* Renders the Claude, ChatGPT, Ollama, and GitHub cards into `root`. Returns { dispose }. */
 function providerCards(root) {
   let disposed = false;
   let poll = null;
-  const ui = { claudeCode: "", codexUrl: "", ollamaUrl: "", ollamaName: "", found: null, busy: {} };
+  const ui = { claudeCode: "", codexUrl: "", ollamaUrl: "", ollamaName: "", githubToken: "", githubTokenMode: false, found: null, busy: {} };
   let data = null;
 
   const plan = (p) => (p ? ` · ${esc(p[0].toUpperCase() + p.slice(1))} plan` : "");
@@ -619,10 +619,49 @@ function providerCards(root) {
       </form>${errLine("ollama-error")}</section>`;
   }
 
+  function githubCard(g) {
+    let body;
+    const f = g.login_flow;
+    if (!g.installed) {
+      body = `<p class="muted">The GitHub CLI (<code>gh</code>) isn't installed here. Rebuild the Hangar image to add it.</p>`;
+    } else if (g.linked) {
+      body = `${linkedLine(g.login)}
+        ${g.git ? `<p class="muted">Sessions can clone, pull, and push github.com repos over HTTPS. No SSH keys needed.</p>`
+          : `<p class="error">Git isn't set up to use this login. Unlink and sign in again.</p>`}
+        <div class="form-actions"><button class="btn" data-pa="github-logout">Unlink</button></div>`;
+    } else if (f?.code) {
+      body = `<ol class="steps">
+          <li><span>Copy this code:</span>
+            <div class="device-code"><code id="github-code">${esc(f.code)}</code>
+              <button class="btn small" data-pa="github-copy" type="button">Copy</button></div></li>
+          <li><span>Open GitHub, paste the code, and approve <b>GitHub CLI</b>.</span>
+            <a class="btn primary" href="${esc(f.url)}" target="_blank" rel="noopener noreferrer">Open GitHub sign-in ↗</a></li>
+        </ol>
+        <p class="waiting" aria-live="polite">${f.running ? "Waiting for you to finish signing in…" : esc(f.error || "Sign-in stopped.")}</p>
+        <div class="form-actions"><button class="btn ghost" data-pa="github-cancel">Cancel</button></div>`;
+    } else if (ui.githubTokenMode) {
+      body = `<ol class="steps">
+          <li><span>Create a classic token with the <b>repo</b>, <b>read:org</b>, and <b>workflow</b> scopes.</span>
+            <a class="btn" href="${esc(g.token_url)}" target="_blank" rel="noopener noreferrer">Create a token on GitHub ↗</a></li>
+          <li><span>Paste it here.</span>
+            <form class="inline-form" data-pf="github-token">
+              <input type="password" id="github-token" autocomplete="off" spellcheck="false" placeholder="ghp_…" value="${esc(ui.githubToken)}" required>
+              <button class="btn primary" type="submit">Link</button></form></li>
+        </ol>
+        <div class="form-actions"><button class="btn ghost" data-pa="github-token-mode">Back</button></div>`;
+    } else {
+      body = `<p class="muted">Clone, pull, and push your repos from any session, over HTTPS. No SSH keys needed.</p>
+        <div class="form-actions"><button class="btn primary" data-pa="github-login">Sign in with GitHub</button>
+          <button class="btn ghost" data-pa="github-token-mode">Use a token instead</button></div>`;
+    }
+    return `<section class="card provider" aria-labelledby="pv-github"><h3 id="pv-github">GitHub <small>git over HTTPS</small></h3>
+      ${body}${errLine("github-error")}</section>`;
+  }
+
   function render() {
     if (disposed || !data) return;
     const focus = document.activeElement?.id;
-    root.innerHTML = `<div class="providers">${claudeCard(data.claude)}${codexCard(data.codex)}${ollamaCard(data.ollama)}</div>`;
+    root.innerHTML = `<div class="providers">${claudeCard(data.claude)}${codexCard(data.codex)}${ollamaCard(data.ollama)}${data.github ? githubCard(data.github) : ""}</div>`;
     if (focus && $(`#${focus}`, root)) $(`#${focus}`, root).focus();
     schedule();
   }
@@ -630,8 +669,20 @@ function providerCards(root) {
   function schedule() {
     clearTimeout(poll);
     const x = data.codex;
-    const busy = ["downloading", "verifying", "unpacking"].includes(x.install?.state) || (x.login?.mode === "device" && x.login.running);
-    if (busy) poll = setTimeout(refreshCodex, 1500);
+    const codexBusy = ["downloading", "verifying", "unpacking"].includes(x.install?.state) || (x.login?.mode === "device" && x.login.running);
+    const githubBusy = !!data.github?.login_flow?.running;
+    if (codexBusy || githubBusy) {
+      poll = setTimeout(() => { if (codexBusy) refreshCodex(); if (githubBusy) refreshGithub(); }, 1500);
+    }
+  }
+
+  async function refreshGithub() {
+    try {
+      const before = data.github;
+      data.github = await api("/api/providers/github");
+      if (!before?.linked && data.github.linked) toast("GitHub linked");
+      render();
+    } catch { schedule(); }
   }
 
   async function load() {
@@ -672,6 +723,11 @@ function providerCards(root) {
       else if (what === "codex-cancel") { await api("/api/providers/codex/cancel", { method: "POST" }); data.codex.login = null; ui.codexUrl = ""; }
       else if (what === "codex-logout") { data.codex = await api("/api/providers/codex/logout", { method: "POST" }); }
       else if (what === "codex-copy") { await copyWithToast($("#codex-code", root).textContent, "Code copied"); return; }
+      else if (what === "github-login") { ui.githubTokenMode = false; data.github.login_flow = await api("/api/providers/github/login", { method: "POST" }); }
+      else if (what === "github-cancel") { await api("/api/providers/github/cancel", { method: "POST" }); data.github.login_flow = null; }
+      else if (what === "github-logout") { data.github = await api("/api/providers/github/logout", { method: "POST" }); }
+      else if (what === "github-copy") { await copyWithToast($("#github-code", root).textContent, "Code copied"); return; }
+      else if (what === "github-token-mode") { ui.githubTokenMode = !ui.githubTokenMode; ui.githubToken = ""; }
       else if (what === "ollama-remove") { await api(`/api/providers/ollama/${el.dataset.id}`, { method: "DELETE" }); data.ollama = await api("/api/providers/ollama"); }
       else if (what === "ollama-add-found") {
         await api("/api/providers/ollama", { method: "POST", body: { url: el.dataset.url } });
@@ -698,6 +754,13 @@ function providerCards(root) {
         data.codex = await api("/api/providers/codex/callback", { method: "POST", body: { url: ui.codexUrl } });
         ui.codexUrl = "";
         toast("ChatGPT linked");
+      } else if (what === "github-token") {
+        ui.githubToken = $("#github-token", root).value;
+        $("#github-error", root).textContent = "Checking the token…";
+        data.github = await api("/api/providers/github/token", { method: "POST", body: { token: ui.githubToken } });
+        ui.githubToken = "";
+        ui.githubTokenMode = false;
+        toast("GitHub linked");
       } else if (what === "ollama-add") {
         ui.ollamaUrl = $("#ollama-url", root).value;
         ui.ollamaName = $("#ollama-name", root).value;
@@ -727,7 +790,7 @@ function providerCards(root) {
   });
   // The cards re-render while Codex installs or signs in; keep whatever was typed in the meantime.
   root.addEventListener("input", (e) => {
-    const map = { "claude-code": "claudeCode", "codex-url": "codexUrl", "ollama-url": "ollamaUrl", "ollama-name": "ollamaName" };
+    const map = { "claude-code": "claudeCode", "codex-url": "codexUrl", "ollama-url": "ollamaUrl", "ollama-name": "ollamaName", "github-token": "githubToken" };
     if (map[e.target.id]) ui[map[e.target.id]] = e.target.value;
   });
   root.addEventListener("submit", (e) => {
@@ -1540,7 +1603,11 @@ async function openNewSession() {
     <div class="field"><span>Folder</span>
       ${recent.length ? `<div class="chips">${recent.map((p) => `<button type="button" class="chip" data-cwd="${esc(p)}" title="${esc(p)}">${esc(p.split("/").pop() || p)}</button>`).join("")}</div>` : ""}
       <div class="picker"><div class="picker-path"><button type="button" class="btn small ghost" id="pk-up" aria-label="Up one folder">↑</button><span id="pk-path"></span></div>
-      <div class="picker-list" id="pk-list"></div></div></div>
+      <div class="picker-list" id="pk-list"></div></div>
+      <details class="clone" id="cl"><summary>Clone from GitHub</summary>
+        <input type="text" id="cl-q" placeholder="Search your repos, or paste owner/name" autocomplete="off" spellcheck="false" aria-label="Repo">
+        <div class="picker-list" id="cl-list"></div>
+        <p class="hint" id="cl-note"></p></details></div>
     <div class="field"><span>Name <small>(optional)</small></span><input type="text" id="nf-label" maxlength="60" placeholder="e.g. Fix login bug"></div>
     <fieldset class="field agent-pick"><legend>Agent</legend>
       <label class="seg"><input type="radio" name="nf-agent" value="claude" checked><span>Claude Code</span></label>
@@ -1604,10 +1671,59 @@ async function openNewSession() {
   api("/api/providers/codex").then((x) => { avail.codex = x; syncAgent(); }).catch(() => { avail.codex = { installed: false }; syncAgent(); });
   api("/api/providers/ollama").then((o) => { avail.ollama = o.servers; syncAgent(); }).catch(() => { avail.ollama = []; syncAgent(); });
 
+  // Clone from GitHub: lists the linked account's repos; any owner/name can be typed in.
+  const clone = { repos: null, note: "", busy: false };
+  const REPO_RE = /^(?:(?:https?:\/\/)?(?:www\.)?github\.com[/:]|git@github\.com:)?([A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/;
+  function renderClone() {
+    const q = $("#cl-q").value.trim();
+    const typed = q.match(REPO_RE)?.[1];
+    const list = (clone.repos || []).filter((r) => !q || r.full_name.toLowerCase().includes(q.toLowerCase())).slice(0, 50);
+    const rows = list.map((r) => `<button type="button" data-repo="${esc(r.full_name)}" title="${esc(r.description)}">${esc(r.full_name)}${r.private ? ` <small class="dim">private</small>` : ""}</button>`);
+    if (typed && !list.some((r) => r.full_name.toLowerCase() === typed.toLowerCase())) {
+      rows.unshift(`<button type="button" data-repo="${esc(typed)}">Clone <b>${esc(typed)}</b></button>`);
+    }
+    $("#cl-list").innerHTML = rows.join("") || (clone.repos === null ? "" : `<div class="empty">No matching repos</div>`);
+    $("#cl-note").innerHTML = clone.note || (cwd ? `Clones into <code>${esc(cwd)}</code>, the folder selected above.` : "Pick a folder above first.");
+  }
+  $("#cl").addEventListener("toggle", async () => {
+    if (!$("#cl").open || clone.repos !== null) return renderClone();
+    clone.note = "Loading your repos…";
+    renderClone();
+    try { clone.repos = (await api("/api/providers/github/repos")).repos; clone.note = ""; }
+    catch { clone.repos = []; clone.note = `<a href="#/settings">Link GitHub in Settings</a> to see your repos and clone private ones. Public repos work by name.`; }
+    renderClone();
+    $("#cl-q").focus();
+  });
+  $("#cl-q").addEventListener("input", renderClone);
+  $("#cl-note").addEventListener("click", (e) => { if (e.target.closest("a")) dlg.close(); });
+  $("#cl-list").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-repo]");
+    if (!b || clone.busy) return;
+    if (!cwd) { $("#nf-err").textContent = "Pick a folder to clone into."; return; }
+    clone.busy = true;
+    $("#nf-go").disabled = true;
+    $("#nf-err").textContent = "";
+    clone.note = `Cloning ${esc(b.dataset.repo)}…`;
+    renderClone();
+    try {
+      const r = await api("/api/providers/github/clone", { method: "POST", body: { repo: b.dataset.repo, parent: cwd } });
+      toast(`Cloned ${r.repo}`);
+      clone.note = "";
+      $("#cl").open = false;
+      if (!$("#nf-label").value) $("#nf-label").value = r.repo.split("/").pop();
+      await browse(r.path);
+    } catch (err) {
+      clone.note = "";
+      $("#nf-err").textContent = err.message;
+      renderClone();
+    } finally { clone.busy = false; syncAgent(); }
+  });
+
   async function browse(path) {
     try {
       const d = await api("/api/dirs?path=" + encodeURIComponent(path || ""));
       if (d.path) cwd = d.path;
+      if ($("#cl").open) renderClone();
       $("#pk-path").textContent = d.path ? "‎" + d.path : "Workspaces";
       $("#pk-up").disabled = !d.parent && !d.path;
       $("#pk-up").onclick = () => browse(d.parent || "");

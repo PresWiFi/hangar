@@ -325,6 +325,12 @@ input:focus-visible, select:focus-visible, textarea:focus-visible, .btn:focus-vi
 .picker-path { display: flex; gap: 6px; align-items: center; padding: 6px 8px; background: var(--surface-2); font: 12px var(--mono); }
 .picker-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; flex: 1; }
 .picker-list { max-height: 210px; overflow-y: auto; }
+.clone { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 6px 8px; }
+.clone summary { cursor: pointer; font-size: 13px; }
+.clone[open] summary { margin-bottom: 8px; }
+.clone input { width: 100%; margin-bottom: 6px; }
+.clone .picker-list { max-height: 180px; }
+.clone .hint { margin-top: 6px; }
 .picker-list button {
   display: block; width: 100%; text-align: left; border: 0; background: none; padding: 7px 12px; cursor: pointer;
   border-bottom: 1px solid var(--border);
