@@ -69,15 +69,17 @@ Run Hangar from your WSL distro, not PowerShell, so its paths match Claude Code 
 
 ### Proxmox VE
 
-Run this in the Proxmox host's shell (as root). It creates a Debian 12 LXC container with Docker, builds and starts Hangar, and can add the container to your tailnet:
+Run this in the Proxmox host's shell (as root):
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/PresWiFi/hangar/main/proxmox/hangar.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/PresWiFi/hangar/main/proxmox/ct/hangar.sh)"
 ```
 
-It asks for the container ID, size, storage, and network (Enter keeps each default), then prints Hangar's address and setup code. The container is unprivileged with nesting turned on, starts on boot, and keeps your projects in `/home/hangar/claude`. To skip the questions, set the values up front, for example `YES=1 CTID=210 MEMORY=8192 TAILSCALE=0 bash -c "$(curl ...)"`; the list is at the top of the [script](proxmox/hangar.sh).
+It uses the [community-scripts](https://community-scripts.org) engine: you get the usual menu (default or advanced settings), and it creates an unprivileged Debian 13 LXC container. Hangar is installed directly in the container (no Docker) from the latest [release](https://github.com/PresWiFi/hangar/releases), along with Claude Code and the GitHub CLI, and runs as the `hangar` systemd service. Your projects go in `/root/claude`, and the settings are in `/opt/hangar_data/hangar.env`.
 
-Update later with `pct exec <ctid> -- update-hangar`.
+When it finishes, open `http://<container-ip>:7878` and enter the setup code from `journalctl -u hangar`. To update, run `update` in the container's console. For Tailscale, use community-scripts' Tailscale add-on on the container.
+
+Sessions run as root in the container, with Claude's bypass-permissions mode allowed (`IS_SANDBOX=1`). Keep the container unprivileged and don't mount sensitive host folders into it.
 
 ## Reaching it from other devices
 
