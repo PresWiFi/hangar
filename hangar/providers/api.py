@@ -1,4 +1,4 @@
-"""/api/providers: link and unlink Claude, ChatGPT (Codex), and Ollama. Owner only (normal cookie + header)."""
+"""/api/providers: link and unlink Claude, ChatGPT (Codex), Ollama, and GitHub. Owner only (normal cookie + header)."""
 from __future__ import annotations
 
 import asyncio
@@ -6,7 +6,8 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from . import claude, codex, ollama
+from .. import files
+from . import claude, codex, github, ollama
 
 router = APIRouter(prefix="/api/providers")
 
@@ -22,9 +23,9 @@ async def _run(fn, *args):
 
 @router.get("")
 async def all_status():
-    c, x, o = await asyncio.gather(asyncio.to_thread(claude.status), asyncio.to_thread(codex.status),
-                                   asyncio.to_thread(ollama.status))
-    return {"claude": c, "codex": x, "ollama": o}
+    c, x, o, g = await asyncio.gather(asyncio.to_thread(claude.status), asyncio.to_thread(codex.status),
+                                      asyncio.to_thread(ollama.status), asyncio.to_thread(github.status))
+    return {"claude": c, "codex": x, "ollama": o, "github": g}
 
 
 # ---------- Claude ----------
@@ -129,3 +130,52 @@ async def ollama_remove(server_id: str):
         raise HTTPException(404, "No such server")
     await _run(ollama.remove, server_id)
     return {"ok": True}
+
+
+# ---------- GitHub ----------
+
+@router.get("/github")
+async def github_status():
+    return await _run(github.status)
+
+
+@router.post("/github/login")
+async def github_login():
+    return await _run(github.start_login)
+
+
+class Token(BaseModel):
+    token: str
+
+
+@router.post("/github/token")
+async def github_token(body: Token):
+    return await _run(github.login_with_token, body.token)
+
+
+@router.post("/github/cancel")
+async def github_cancel():
+    await _run(github.cancel_login)
+    return {"ok": True}
+
+
+@router.post("/github/logout")
+async def github_logout():
+    return await _run(github.logout)
+
+
+@router.get("/github/repos")
+async def github_repos():
+    return {"repos": await _run(github.repos)}
+
+
+class Clone(BaseModel):
+    repo: str
+    parent: str
+
+
+@router.post("/github/clone")
+async def github_clone(body: Clone):
+    if not body.parent or not files.inside_workspace(body.parent):
+        raise HTTPException(403, "Outside the configured workspaces (HANGAR_WORKSPACES)")
+    return await _run(github.clone, body.repo, body.parent)

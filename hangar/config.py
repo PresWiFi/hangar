@@ -30,6 +30,7 @@ class Settings:
     password: str = ""
     tmux_socket: str = ""             # empty = tmux's default socket
     claude_cmd: str = "claude"
+    gh_cmd: str = "gh"                # GitHub CLI, for linking GitHub and cloning repos
     claude_args: str = ""             # extra arguments for every new or resumed session
     claude_base_args: str = ""        # set by the Docker image (permission rules, container notes)
     autorestore: bool = False         # reopen sessions that were running when Hangar last stopped
@@ -53,6 +54,7 @@ class Settings:
         s.password = e.get("HANGAR_PASSWORD", "")
         s.tmux_socket = e.get("HANGAR_TMUX_SOCKET", "")
         s.claude_cmd = e.get("HANGAR_CLAUDE_CMD", s.claude_cmd)
+        s.gh_cmd = e.get("HANGAR_GH_CMD", s.gh_cmd)
         s.claude_args = e.get("HANGAR_CLAUDE_ARGS", "")
         s.claude_base_args = e.get("HANGAR_CLAUDE_BASE_ARGS", "")
         s.autorestore = _bool(e.get("HANGAR_AUTORESTORE"))

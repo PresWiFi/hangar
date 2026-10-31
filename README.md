@@ -21,6 +21,7 @@ It also has a dashboard with your Claude and ChatGPT plan usage and token activi
 - **Token activity.** Daily and hourly input and output tokens from the local logs, plus the busiest projects and the models used today.
 - **Claude can install what it needs.** In Docker, Claude can `sudo apt-get install` missing tools. You get a permission prompt for every sudo command, even in auto mode, and installed packages come back after the container is recreated.
 - **File uploads.** Each session has a **Files** tab for its folder: upload by button or drag and drop, browse subfolders, and download what Claude made. In the terminal, **+ Attach** (or dropping a file on it) uploads into the session folder and types `@file` into Claude's prompt, so you can add a question before sending.
+- **GitHub without SSH keys.** Sign in with GitHub in Settings and sessions can clone, pull, and push over HTTPS. **New session > Clone from GitHub** lists your repos and clones one into the folder you picked.
 - **Pins, archive, renames, and private notes** for each session.
 - **Sign in with SSO.** Optional OpenID Connect sign-in through Authentik, Microsoft Entra ID, Google, Keycloak, Duo, or any other provider.
 - **Connect your AI without API keys.** Sign in with your Claude subscription, link ChatGPT through OpenAI's Codex CLI (Hangar installs it for you), and add Ollama servers on this machine or your network. All from the browser, during setup or later in Settings.
@@ -102,6 +103,19 @@ Codex's own command sandbox can't work inside Docker (it needs user namespaces).
 
 **Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
 
+## Connecting GitHub
+
+Link GitHub in **Settings** (or on the welcome page) so sessions can use your repos without SSH keys.
+
+1. Click **Sign in with GitHub**. Hangar shows a one-time code.
+2. Open the GitHub link, enter the code, and approve **GitHub CLI**.
+
+Hangar runs the [GitHub CLI](https://cli.github.com/) (`gh auth login`, then `gh auth setup-git`), so git asks `gh` for a token whenever it talks to github.com. Clone, pull, and push work over HTTPS in every session, and Claude can use `gh` for pull requests and issues. If your git name and email aren't set yet, Hangar fills them in from your GitHub account (with GitHub's private noreply address when your email isn't public). The login lives in `~/.config/gh` in the container's home volume, so it survives rebuilds.
+
+If you can't use the device code, choose **Use a token instead** and paste a classic personal access token with the `repo`, `read:org`, and `workflow` scopes. **Unlink** signs `gh` out and removes the git setting.
+
+To start on a repo, open **New session**, pick the parent folder, open **Clone from GitHub**, and pick a repo (or type `owner/name`). Hangar clones it into that folder and selects it for the session.
+
 ## Sign in with SSO
 
 Hangar can use an OpenID Connect provider for sign-in: Authentik, Microsoft Entra ID, Google, Keycloak, Duo, or any other. It still has one owner; you link your own identity at the provider, and only that identity can sign in.
@@ -154,7 +168,7 @@ If you need the host's full toolchain instead, run Hangar without Docker (below)
 
 ## Running without Docker
 
-Needs Linux or macOS (or WSL), Python 3.10+, tmux, and Claude Code. Codex is installed from Settings if you link ChatGPT; it needs `zstd` to read week-old Codex logs.
+Needs Linux or macOS (or WSL), Python 3.10+, tmux, and Claude Code. Linking GitHub needs the [GitHub CLI](https://cli.github.com/) (`gh`), and changes your own `~/.gitconfig`. Codex is installed from Settings if you link ChatGPT; it needs `zstd` to read week-old Codex logs.
 
 ```bash
 python3 -m venv ~/.local/share/hangar-venv
@@ -179,6 +193,7 @@ Sessions then run in your own tmux server, with all your tools, and you can atta
 | `HANGAR_CLAUDE_ARGS` | | Extra arguments for every new or resumed session. |
 | `ALLOW_SUDO` (build) | `true` | Docker only: give Claude sudo, with a permission prompt for each sudo command. |
 | `HANGAR_CLAUDE_CMD` | `claude` | Path to the Claude Code binary. |
+| `HANGAR_GH_CMD` | `gh` | Path to the GitHub CLI, used to link GitHub and clone repos. |
 | `HANGAR_TMUX_SOCKET` | tmux default | Use a specific tmux server socket. |
 | `HANGAR_USAGE_POLL_MINUTES` | `5` | How often to check plan usage (minimum 1; the endpoint rate-limits). |
 | `HANGAR_MAX_UPLOAD_MB` | `512` | Largest file you can upload from the browser. |
@@ -199,6 +214,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - New sessions, uploads, and downloads are limited to `HANGAR_WORKSPACES`. Downloaded files are served with a sandbox policy, so an uploaded HTML file can't run scripts as Hangar.
 - A terminal can still `cd` anywhere the container can see, so only mount what you need.
 - In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
+- Linking GitHub stores a GitHub token in `gh`'s config folder (`~/.config/gh`), readable by anyone signed in to Hangar, the same as the Claude login. Clones go only into `HANGAR_WORKSPACES`, and repo names are checked before git runs.
 - Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it. It reads Codex's `auth.json` to show which account is linked and to check ChatGPT usage the way Codex does; it never refreshes or changes the token.
 - Codex is downloaded from a pinned GitHub release and installed only if its SHA-256 matches the one built into Hangar.
 - The Codex browser fallback only accepts `http://localhost:1455/auth/callback` addresses, so it can't be used to make Hangar request anything else.
