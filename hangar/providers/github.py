@@ -24,8 +24,6 @@ SCOPES = "repo,read:org,workflow"
 TOKEN_URL = "https://github.com/settings/tokens/new?scopes=repo,read:org,workflow&description=Hangar"
 
 _CODE = re.compile(r"one-time code:\s*([A-Z0-9]{4}-[A-Z0-9]{4})")
-_PRESS_ENTER = re.compile(r"Press Enter", re.I)
-_GIT_PROMPT = re.compile(r"Authenticate Git with your GitHub credentials", re.I)
 _REPO = re.compile(r"^([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/([A-Za-z0-9._-]{1,100})$")
 _HELPER = re.compile(r"gh(\.exe)?\s+auth\s+git-credential")
 
@@ -36,8 +34,10 @@ _cache: tuple[float, dict] | None = None
 
 
 def _env() -> dict[str, str]:
-    # Never let git or gh stop and wait for a password nobody can type.
-    return clean_env({"GIT_TERMINAL_PROMPT": "0", "GH_NO_UPDATE_NOTIFIER": "1"})
+    # Never let git or gh stop and wait for input nobody can type. gh's prompts also query the terminal's
+    # cursor position and hang without a reply; with prompts off, `gh auth login --web` prints the code
+    # right away, and Hangar runs `gh auth setup-git` itself afterwards.
+    return clean_env({"GIT_TERMINAL_PROMPT": "0", "GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"})
 
 
 def _gh(*args: str, input: str | None = None, timeout: float = 60) -> subprocess.CompletedProcess:
@@ -117,19 +117,11 @@ def _finish() -> None:
 # ---------- device-code sign-in ----------
 
 def _watch(flow: PtyRun) -> None:
-    """Answers gh's prompts and finishes setup once it exits. Runs until the flow ends or is replaced."""
-    answered: set[str] = set()
+    """Finishes setup once gh exits. Runs until the flow ends or is replaced."""
     while not flow.done and _flow is flow:
-        text = flow.text
-        m = _CODE.search(text)
+        m = _CODE.search(flow.text)
         if m and "code" not in _flow_info:
             _flow_info["code"] = m.group(1)
-        if _GIT_PROMPT.search(text) and "git" not in answered:
-            flow.write("Y\n")
-            answered.add("git")
-        if _PRESS_ENTER.search(text) and "enter" not in answered:
-            flow.write("\n")  # "Press Enter to open github.com in your browser" (BROWSER=true, so nothing opens)
-            answered.add("enter")
         time.sleep(0.2)
     if _flow is not flow:
         return

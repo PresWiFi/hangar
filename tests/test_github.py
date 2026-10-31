@@ -13,7 +13,8 @@ from tests.test_providers import script
 
 @pytest.fixture
 def fake_gh(tmp_path, monkeypatch):
-    """`api user` works once `linked` exists. The device flow waits for `approve`, like a person on github.com."""
+    """`api user` works once `linked` exists. The device flow waits for `approve`, like a person on github.com,
+    and hangs at a prompt unless GH_PROMPT_DISABLED=1, like the real gh."""
     linked, approve = tmp_path / "linked", tmp_path / "approve"
     repos = [{"full_name": "me/app", "private": True, "description": "My app", "pushed_at": "2026-10-01T00:00:00Z"}]
     exe = script(tmp_path / "gh", f"""
@@ -25,9 +26,13 @@ def fake_gh(tmp_path, monkeypatch):
           read -r tok
           if [ "$tok" = "ghp_good" ]; then touch {linked}; else echo "error validating token: HTTP 401" >&2; exit 1; fi
         elif [ "$1 $2" = "auth login" ]; then
+          if [ "$GH_PROMPT_DISABLED" != 1 ]; then
+            # Like gh 2.10x: asks about git, queries the cursor position, and hangs without a reply.
+            printf '? Authenticate Git with your GitHub credentials? (Y/n) \033[6n'
+            sleep 300
+          fi
           echo "! First copy your one-time code: ABCD-1234"
-          printf "Press Enter to open github.com in your browser... "
-          read -r _
+          echo "Open this URL to continue in your web browser: https://github.com/login/device"
           while [ ! -f {approve} ]; do sleep 0.1; done
           echo "✓ Authentication complete."; touch {linked}
         elif [ "$1 $2" = "auth setup-git" ]; then
