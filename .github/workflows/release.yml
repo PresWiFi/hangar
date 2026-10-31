@@ -1,0 +1,38 @@
+# Publishes a GitHub release when a version tag is pushed:
+#   1. Set __version__ in hangar/__init__.py, e.g. "0.3.0", and merge it to main.
+#   2. git tag v0.3.0 && git push origin v0.3.0
+# The Proxmox script installs and updates from these releases.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches hangar/__init__.py
+        run: |
+          version="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' hangar/__init__.py)"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME doesn't match __version__ = \"$version\" in hangar/__init__.py"
+            exit 1
+          fi
+
+  tests:
+    uses: ./.github/workflows/tests.yml
+
+  release:
+    needs: [check-version, tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes --title "Hangar $GITHUB_REF_NAME"

@@ -220,6 +220,15 @@ HANGAR_PASSWORD=dev-password HANGAR_PORT=7979 python -m hangar   # sign in as ad
 python -m pytest -q                                              # tests (needs requirements-dev.txt)
 ```
 
+### Releasing
+
+Releases are GitHub releases built from version tags; the Proxmox script installs and updates from them.
+
+1. Set `__version__` in `hangar/__init__.py` (for example `0.3.0`) and merge that to `main`.
+2. Tag it: `git tag v0.3.0 && git push origin v0.3.0`.
+
+The **Release** workflow checks that the tag matches `__version__`, runs the tests, and publishes the release with notes generated from the merged pull requests. The **Tests** workflow runs on every pull request.
+
 ## Credits
 
 - [xterm.js](https://xtermjs.org/) (MIT), [marked](https://marked.js.org/) (MIT), [DOMPurify](https://github.com/cure53/DOMPurify) (Apache-2.0 / MPL-2.0)
