@@ -67,6 +67,18 @@ Run Hangar from your WSL distro, not PowerShell, so its paths match Claude Code 
 2. In WSL, set `WORKSPACE` to the path WSL uses, for example `/mnt/c/Users/you/code`.
 3. Run `docker compose up -d --build` from WSL.
 
+### Proxmox VE
+
+Run this in the Proxmox host's shell (as root). It creates a Debian 12 LXC container with Docker, builds and starts Hangar, and can add the container to your tailnet:
+
+```bash
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/PresWiFi/hangar/main/proxmox/hangar.sh)"
+```
+
+It asks for the container ID, size, storage, and network (Enter keeps each default), then prints Hangar's address and setup code. The container is unprivileged with nesting turned on, starts on boot, and keeps your projects in `/home/hangar/claude`. To skip the questions, set the values up front, for example `YES=1 CTID=210 MEMORY=8192 TAILSCALE=0 bash -c "$(curl ...)"`; the list is at the top of the [script](proxmox/hangar.sh).
+
+Update later with `pct exec <ctid> -- update-hangar`.
+
 ## Reaching it from other devices
 
 **Home network:** with the default `HANGAR_BIND=0.0.0.0`, open `http://<machine-ip>:7878` from any device on the network. You may need to allow port 7878 in the host firewall.
