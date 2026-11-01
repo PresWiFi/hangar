@@ -43,7 +43,8 @@ If visitors cannot install, fix onboarding before further promotion. If there ar
 | README improvements | Prepared | Campaign diff |
 | Launch materials | Prepared separately | launch-copy.md |
 | Channel research | Prepared separately | distribution.md |
-| Clean install and real demo | Pending | Verification must precede claims of tested onboarding |
+| Authentication checks | Complete within test scope | 27 passed; validation.md |
+| Clean Docker install and real demo | Pending | Docker absent; verification must precede broader claims |
 | Public distribution | Pending posting authorization and account access | No launch posts sent |
 
 ## Applied metadata
@@ -57,3 +58,5 @@ Kept existing topics and added `codex`, `homelab`, `proxmox`. Description and to
 - [Launch copy and demo storyboard](launch-copy.md)
 - [Channel research](distribution.md)
 - [Metrics](metrics.csv)
+
+- [Validation evidence and remaining gates](validation.md)
