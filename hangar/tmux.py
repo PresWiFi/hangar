@@ -230,10 +230,13 @@ def codex_command(args: list[str]) -> str:
 
 def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: bool = False,
                 model: str = "", permission_mode: str = "", shell_only: bool = False, prompt: str = "",
-                agent: str = "claude", codex_mode: str = "ask", ollama: dict | None = None) -> dict:
+                agent: str = "claude", codex_mode: str = "ask", ollama: dict | None = None,
+                name: str | None = None, task: str | None = None, unattended: bool = False) -> dict:
     """Start Claude, Codex, or a plain shell in a new tmux session. `prompt` is sent as the opening message.
     `ollama` is {"server": id, "url": base url, "model": name, "kind": "ollama" | "llamacpp", "api_key": ""}
-    to run the agent on a local model server's model."""
+    to run the agent on a local model server's model.
+    `name` gives the tmux session a fixed name, `task` marks it as a scheduled task's session, and `unattended`
+    skips Claude Code's bypass-permissions confirmation (scheduled tasks run with nobody watching)."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         raise TmuxError(f"Folder not found: {cwd}")
@@ -241,9 +244,15 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         raise TmuxError(f"Unknown agent: {agent}")
     if codex_mode not in CODEX_MODES:
         raise TmuxError(f"Unknown Codex mode: {codex_mode}")
-    name = _unique_name("hg-" + _slug(label or Path(cwd).name))
+    if name is not None:
+        if not valid_name(name) or name in {s["name"] for s in list_sessions(with_live=False)}:
+            raise TmuxError(f"Session {name} already exists")
+    else:
+        name = _unique_name("hg-" + _slug(label or Path(cwd).name))
     env = {"TERM": "xterm-256color", "COLORTERM": "truecolor", "CODEX_HOME": str(settings.codex_home)}
     launch: dict = {"agent": agent}
+    if task:
+        launch["task"] = task
     local_kind = (ollama or {}).get("kind") or "ollama"
     if ollama:
         # Never the API key: launch info is stored with the session.
@@ -274,7 +283,7 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         if model:
             flags += ["-m", model]
         if resume:
-            args = ["fork" if fork else "resume", *flags, resume]
+            args = ["fork" if fork else "resume", *flags, "--", resume] + ([prompt] if prompt else [])
             claude_id = "" if fork else resume
         else:
             args = flags + (["--", prompt] if prompt else [])
@@ -304,6 +313,9 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
             extra += ["--model", model]
         if permission_mode:
             extra += ["--permission-mode", permission_mode]
+        if unattended and permission_mode == "bypassPermissions":
+            # Otherwise Claude Code stops at a confirmation screen nobody is there to answer.
+            extra += ["--settings", '{"skipDangerousModePermissionPrompt":true}']
         if prompt:
             extra += ["--", prompt]  # "--" so options that take several values can't swallow the prompt
         command = claude_command(extra)

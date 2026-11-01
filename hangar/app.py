@@ -14,6 +14,8 @@ from pydantic import BaseModel
 
 from . import __version__, auth, files, oidc, plugins, store, tmux
 from .providers.api import router as providers_router
+from .schedule_api import router as schedules_router
+from . import schedules
 from .config import settings
 from .codex_sessions import codex_index
 from .codex_usage import _auth as codex_chatgpt_auth, codex_poller, newest as newest_codex_usage
@@ -42,11 +44,13 @@ async def lifespan(app: FastAPI):
         if started:
             print(f"Restored {len(started)} session(s)", flush=True)
     tracker = asyncio.create_task(_track_open_sessions())  # keep a reference so it is not garbage-collected
+    scheduler = asyncio.create_task(_run_schedules())
     print(f"Hangar {__version__} on http://{settings.host}:{settings.port}", flush=True)
     for line in auth.startup_lines():
         print(line, flush=True)
     yield
     tracker.cancel()
+    scheduler.cancel()
 
 
 async def _track_open_sessions() -> None:
@@ -57,6 +61,16 @@ async def _track_open_sessions() -> None:
             await asyncio.to_thread(tmux.list_sessions)
         except Exception:
             pass
+
+
+async def _run_schedules() -> None:
+    """Starts scheduled tasks when they're due."""
+    while True:
+        await asyncio.sleep(20)
+        try:
+            await asyncio.to_thread(schedules.tick)
+        except Exception as e:  # noqa: BLE001 - keep the scheduler alive; the next tick tries again
+            print(f"Scheduled tasks: {e}", flush=True)
 
 
 def _resumable(claude_id: str) -> bool:
@@ -73,6 +87,7 @@ app = FastAPI(title="Hangar", version=__version__, lifespan=lifespan, docs_url=N
 PLUGINS = plugins.load(settings.plugins)
 plugins.active[:] = PLUGINS
 app.include_router(providers_router)
+app.include_router(schedules_router)
 for _plugin in PLUGINS:
     app.include_router(_plugin.router)
 
@@ -414,6 +429,7 @@ def _merge(summary: dict | None, meta: dict | None, live: dict | None) -> dict:
     if out["ollama"]:
         out["cost"] = None  # Claude Code prices local models as if they were Claude; that number means nothing
     out["codex_mode"] = launch.get("codex_mode") if out["agent"] == "codex" else None
+    out["task"] = launch.get("task")  # the scheduled task this session belongs to
     return out
 
 

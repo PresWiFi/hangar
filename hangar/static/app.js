@@ -302,6 +302,7 @@ const agentName = (s) => (s.agent === "codex" ? "Codex" : "Claude");
 /* Short tag for the sidebar: which agent, and whether it runs on a local model (Ollama or llama.cpp). */
 function agentTag(s) {
   const parts = [];
+  if (s.task) parts.push("Scheduled");
   if (s.agent === "codex") parts.push("Codex");
   if (s.ollama) parts.push(s.local_kind || "Ollama");
   return parts.join(" + ");
@@ -503,6 +504,7 @@ function route() {
   else if ((m = h.match(/^#\/s\/([\w-]+)/))) state.view = sessionView({ id: m[1] });
   else if ((m = h.match(/^#\/t\/([\w-]+)/))) state.view = sessionView({ tmuxName: m[1] });
   else if (h === "#/settings") state.view = settingsView();
+  else if (h === "#/scheduled") state.view = schedulesView();
   else if (h === "#/welcome") state.view = welcomeView();
   else state.view = dashboardView();
   renderSidebar();
@@ -1778,6 +1780,186 @@ async function openNewSession() {
   });
 }
 
+/* ---------------- scheduled tasks ---------------- */
+
+const RUN_TEXT = { sent: "Sent", started: "Started", skipped: "Skipped", missed: "Missed", error: "Failed" };
+const SESSION_TEXT = { busy: "Working", idle: "Waiting", shell: "Agent exited", stopped: "Not running" };
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const when = (ts) => (ts ? new Date(ts * 1000).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
+
+function schedulesView() {
+  setMain(`${topbar("Scheduled")}<div class="scroll"><div class="page" id="sched">
+    <div class="page-head"><h1>Scheduled tasks</h1><button class="btn primary" id="sched-new">+ New task</button></div>
+    <p class="muted">Each task has its own session and sends it a prompt on a schedule. If the session is still working, that run is skipped; if it was stopped, it starts again and picks up the same conversation. Tasks run unattended: Claude Code with bypass permissions, Codex with full access.</p>
+    <div id="sched-list"><p class="muted">Loading…</p></div></div></div>`);
+  let disposed = false;
+  let tasks = [];
+  let tz = "";
+
+  function runLine(r) {
+    return `<span class="run-${esc(r.result)}">${esc(RUN_TEXT[r.result] || r.result)}</span> <span class="muted">${esc(fmt.ago(r.at))}${r.detail ? ` · ${esc(r.detail)}` : ""}</span>`;
+  }
+
+  function card(t) {
+    const s = t.session;
+    const href = s.claude_id ? `#/s/${encodeURIComponent(s.claude_id)}` : s.name ? `#/t/${encodeURIComponent(s.name)}` : "";
+    return `<section class="card task" data-id="${esc(t.id)}">
+      <div class="task-head">
+        <h2><span>${esc(t.name)}</span></h2>
+        <label class="switch" title="${t.enabled ? "On" : "Off"}"><input type="checkbox" data-ta="toggle"${t.enabled ? " checked" : ""} aria-label="Run ${esc(t.name)} on schedule"><span></span></label>
+      </div>
+      <p class="task-when"><b>${esc(t.summary)}</b>${t.enabled && t.next_run_text ? ` <span class="muted">· next ${esc(t.next_run_text)}${tz ? ` ${esc(tz)}` : ""}</span>` : t.enabled ? "" : ` <span class="muted">· off</span>`}</p>
+      <p class="task-meta muted"><span class="tag">${t.agent === "codex" ? "Codex" : "Claude"}${t.ollama_model ? ` · ${esc(t.ollama_model)}` : t.model ? ` · ${esc(t.model)}` : ""}</span>
+        <span title="${esc(t.cwd)}">${esc(t.cwd.replace(/^.*\/([^/]+\/[^/]+)$/, "…/$1"))}</span></p>
+      <blockquote class="task-prompt">${esc(t.prompt.length > 240 ? t.prompt.slice(0, 240) + "…" : t.prompt)}</blockquote>
+      <p class="task-session"><span class="dot ${s.state === "busy" ? "busy" : s.state === "idle" ? "idle" : "shell"}"></span>
+        ${esc(SESSION_TEXT[s.state] || s.state)}${href ? ` · <a href="${href}">Open session</a>` : ""}</p>
+      ${t.runs.length ? `<details class="task-runs"><summary>Last run: ${runLine(t.runs[0])}</summary><ul>${t.runs.map((r) => `<li>${esc(when(r.at))} · ${runLine(r)}</li>`).join("")}</ul></details>`
+        : `<p class="muted">Hasn't run yet.</p>`}
+      <div class="form-actions"><button class="btn small" data-ta="run">Run now</button><button class="btn small ghost" data-ta="edit">Edit</button>
+        <button class="btn small ghost" data-ta="delete">Delete</button></div>
+    </section>`;
+  }
+
+  function render() {
+    if (disposed) return;
+    $("#sched-list").innerHTML = tasks.length ? `<div class="task-grid">${tasks.map(card).join("")}</div>`
+      : `<div class="empty">No scheduled tasks yet. <a href="#" id="sched-first">Create one</a>.</div>`;
+  }
+
+  async function load() {
+    try { const r = await api("/api/schedules"); tasks = r.tasks; tz = r.timezone || ""; state.serverTz = tz; render(); }
+    catch (ex) { if (!disposed) $("#sched-list").innerHTML = `<p class="error">${esc(ex.message)}</p>`; }
+  }
+
+  const replace = (t) => { tasks = tasks.map((x) => (x.id === t.id ? t : x)); render(); };
+
+  $("#sched").addEventListener("click", async (e) => {
+    if (e.target.closest("#sched-new, #sched-first")) { e.preventDefault(); return openTaskDialog(null, load); }
+    const b = e.target.closest("button[data-ta]");
+    if (!b) return;
+    const t = tasks.find((x) => x.id === b.closest("[data-id]").dataset.id);
+    try {
+      if (b.dataset.ta === "run") {
+        b.disabled = true;
+        const r = await api(`/api/schedules/${t.id}/run`, { method: "POST" });
+        toast(`${t.name}: ${RUN_TEXT[r.run.result] || r.run.result}${r.run.detail ? ` · ${r.run.detail}` : ""}`);
+        replace(r.task);
+        loadSessions();
+      } else if (b.dataset.ta === "edit") openTaskDialog(t, load);
+      else if (b.dataset.ta === "delete") {
+        if (!confirm(`Delete "${t.name}"? Its session and conversation stay.`)) return;
+        await api(`/api/schedules/${t.id}`, { method: "DELETE" });
+        tasks = tasks.filter((x) => x.id !== t.id);
+        render();
+      }
+    } catch (ex) { toast(ex.message, 6000); b.disabled = false; }
+  });
+  $("#sched").addEventListener("change", async (e) => {
+    const box = e.target.closest("input[data-ta=toggle]");
+    if (!box) return;
+    const id = box.closest("[data-id]").dataset.id;
+    try { replace(await api(`/api/schedules/${id}/enabled`, { method: "POST", body: { enabled: box.checked } })); }
+    catch (ex) { toast(ex.message, 6000); box.checked = !box.checked; }
+  });
+
+  load();
+  const timer = setInterval(() => !document.hidden && !$("#dialog").open && load(), 10000);
+  return { dispose() { disposed = true; clearInterval(timer); } };
+}
+
+/* Create (task = null) or edit a scheduled task. Calls done() after saving. */
+function openTaskDialog(task, done) {
+  const dlg = $("#dialog");
+  const t = task || { name: "", cwd: state.sessions.find((s) => s.cwd)?.cwd || state.me?.workspaces?.[0] || "", agent: "claude",
+    model: "", ollama_server: "", ollama_model: "", prompt: "", enabled: true, schedule: { type: "daily", time: "09:00" } };
+  const sc = t.schedule;
+  const folders = [...new Set([...(state.me?.workspaces || []), ...state.sessions.map((s) => s.cwd).filter(Boolean)])].slice(0, 30);
+  const soon = new Date(Date.now() + 3600e3);
+  soon.setMinutes(0, 0, 0);
+  const localIso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+  dlg.innerHTML = `<form method="dialog" id="task-form">
+    <h2>${task ? "Edit task" : "New scheduled task"}</h2>
+    <label class="field"><span>Name</span><input type="text" id="tf-name" maxlength="60" required placeholder="e.g. Nightly test run" value="${esc(t.name)}"></label>
+    <label class="field"><span>Folder</span><input type="text" id="tf-cwd" list="tf-folders" required spellcheck="false" value="${esc(t.cwd)}">
+      <datalist id="tf-folders">${folders.map((f) => `<option value="${esc(f)}">`).join("")}</datalist></label>
+    <fieldset class="field agent-pick"><legend>Agent</legend>
+      <label class="seg"><input type="radio" name="tf-agent" value="claude"${t.agent === "codex" ? "" : " checked"}><span>Claude Code</span></label>
+      <label class="seg"><input type="radio" name="tf-agent" value="codex"${t.agent === "codex" ? " checked" : ""}><span>Codex</span></label>
+    </fieldset>
+    <label class="field"><span>Model</span><select id="tf-model"></select></label>
+    <label class="field"><span>Prompt <small>(sent on every run)</small></span><textarea id="tf-prompt" rows="5" required placeholder="e.g. Pull the latest main, run the test suite, and fix anything that fails.">${esc(t.prompt)}</textarea></label>
+    <div class="row2">
+      <label class="field"><span>Repeat</span><select id="tf-type">
+        ${[["once", "Once"], ["hourly", "Every hour"], ["daily", "Every day"], ["weekly", "Every week"], ["cron", "Custom (cron)"]]
+          .map(([v, l]) => `<option value="${v}"${sc.type === v ? " selected" : ""}>${l}</option>`).join("")}</select></label>
+      <label class="field" data-for="once"><span>Date and time</span><input type="datetime-local" id="tf-at" value="${esc(sc.at || localIso(soon))}"></label>
+      <label class="field" data-for="hourly"><span>Minutes past the hour</span><input type="number" id="tf-minute" min="0" max="59" value="${sc.minute ?? 0}"></label>
+      <label class="field" data-for="daily weekly"><span>Time</span><input type="time" id="tf-time" value="${esc(sc.time || "09:00")}"></label>
+      <label class="field" data-for="cron"><span>Cron expression</span><input type="text" id="tf-cron" spellcheck="false" placeholder="0 9 * * 1-5" value="${esc(sc.expr || "")}"></label>
+    </div>
+    <fieldset class="field agent-pick" data-for="weekly"><legend>Days</legend>
+      ${DAY_NAMES.map((d, i) => `<label class="seg"><input type="checkbox" name="tf-day" value="${i}"${(sc.days || [1, 2, 3, 4, 5]).includes(i) ? " checked" : ""}><span>${d}</span></label>`).join("")}
+    </fieldset>
+    <p class="hint" data-for="cron">Minute, hour, day of month, month, day of week. <code>0 9 * * 1-5</code> is 09:00 on weekdays; <code>*/30 * * * *</code> is every 30 minutes.</p>
+    <p class="hint">Times are in the server's time zone${state.serverTz ? ` (${esc(state.serverTz)})` : ""}. Runs unattended: Claude Code in bypass-permissions mode, Codex with full access. A run is skipped while the previous one is still working.</p>
+    <label class="check"><input type="checkbox" id="tf-enabled"${t.enabled ? " checked" : ""}> Run on this schedule</label>
+    <p class="error" id="tf-err"></p>
+    <div class="dialog-actions"><button type="button" class="btn" id="tf-cancel">Cancel</button><button class="btn primary" id="tf-save" type="submit">${task ? "Save" : "Create task"}</button></div>
+  </form>`;
+  dlg.showModal();
+
+  let servers = [];
+  const agent = () => dlg.querySelector("[name=tf-agent]:checked").value;
+  function models() {
+    const keep = $("#tf-model").value || (t.ollama_server ? `ollama:${t.ollama_server}:${t.ollama_model}` : t.model);
+    const own = agent() === "codex" ? `<option value="">Default (ChatGPT)</option>`
+      : `<option value="">Default</option><option value="opus">Opus</option><option value="sonnet">Sonnet</option><option value="haiku">Haiku</option>`;
+    const local = servers.filter((sv) => sv.ok && sv.models.length).map((sv) => `<optgroup label="${sv.kind === "llamacpp" ? "llama.cpp" : "Ollama"} · ${esc(sv.name)}">${sv.models.map((m) =>
+      `<option value="ollama:${esc(sv.id)}:${esc(m.name)}">${esc(m.name)}</option>`).join("")}</optgroup>`).join("");
+    $("#tf-model").innerHTML = own + local;
+    if ([...$("#tf-model").options].some((o) => o.value === keep)) $("#tf-model").value = keep;
+  }
+  function syncType() {
+    const type = $("#tf-type").value;
+    dlg.querySelectorAll("[data-for]").forEach((el) => { el.hidden = !el.dataset.for.split(" ").includes(type); });
+  }
+  dlg.querySelectorAll("[name=tf-agent]").forEach((r) => r.addEventListener("change", models));
+  $("#tf-type").addEventListener("change", syncType);
+  $("#tf-cancel").addEventListener("click", () => dlg.close());
+  models();
+  syncType();
+  api("/api/providers/ollama").then((o) => { servers = o.servers; models(); }).catch(() => {});
+
+  $("#task-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const type = $("#tf-type").value;
+    const schedule = { type };
+    if (type === "once") schedule.at = $("#tf-at").value;
+    if (type === "hourly") schedule.minute = parseInt($("#tf-minute").value, 10);
+    if (type === "daily" || type === "weekly") schedule.time = $("#tf-time").value;
+    if (type === "weekly") schedule.days = [...dlg.querySelectorAll("[name=tf-day]:checked")].map((c) => +c.value);
+    if (type === "cron") schedule.expr = $("#tf-cron").value;
+    const model = $("#tf-model").value;
+    const body = { name: $("#tf-name").value, cwd: $("#tf-cwd").value, agent: agent(), prompt: $("#tf-prompt").value,
+      enabled: $("#tf-enabled").checked, schedule, model: "", ollama_server: "", ollama_model: "" };
+    if (model.startsWith("ollama:")) {
+      const [, server, ...rest] = model.split(":");
+      Object.assign(body, { ollama_server: server, ollama_model: rest.join(":") });
+    } else body.model = model;
+    $("#tf-save").disabled = true;
+    try {
+      await api(task ? `/api/schedules/${task.id}` : "/api/schedules", { method: task ? "PUT" : "POST", body });
+      dlg.close();
+      toast(task ? "Task saved" : "Task created");
+      done?.();
+    } catch (ex) {
+      $("#tf-err").textContent = ex.message;
+      $("#tf-save").disabled = false;
+    }
+  });
+}
+
 /* ---------------- plugins ---------------- */
 
 // Optional plugins (HANGAR_PLUGINS) add a sidebar link, a script, and hash routes through window.hangar.
@@ -1789,11 +1971,12 @@ window.hangar = {
 
 function renderSideNav() {
   const nav = $("#side-nav");
-  const links = (state.me?.plugins || []).filter((p) => p.nav);
+  const links = [{ href: "#/scheduled", label: "Scheduled tasks" },
+    ...(state.me?.plugins || []).filter((p) => p.nav).map((p) => p.nav)];
   nav.hidden = !links.length;
-  nav.innerHTML = links.map((p) => {
-    const active = location.hash === p.nav.href || location.hash.startsWith(p.nav.href + "/");
-    return `<a class="side-link${active ? " active" : ""}" href="${esc(p.nav.href)}">${esc(p.nav.label)}</a>`;
+  nav.innerHTML = links.map((l) => {
+    const active = location.hash === l.href || location.hash.startsWith(l.href + "/");
+    return `<a class="side-link${active ? " active" : ""}" href="${esc(l.href)}">${esc(l.label)}</a>`;
   }).join("");
 }
 $("#side-nav").addEventListener("click", (e) => { if (e.target.closest("a")) toggleSide(false); });
