@@ -12,6 +12,7 @@ Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs
 - **Resume or fork** any past Claude Code or Codex conversation. Running sessions come back after a restart.
 - **Usage dashboard**: your Claude and ChatGPT plan limits, when they reset, and daily token activity.
 - **Works on phones**, with a key bar (Esc, Shift+Tab, arrows, Ctrl+C) and a compose box.
+- **Scheduled tasks**: send a prompt to a session every hour, day, week, or on a cron schedule.
 - **GitHub without SSH keys**: sign in once, then clone, pull, and push from any session.
 - **File uploads and downloads** for each session's folder.
 - **One owner account**, with optional SSO (Authentik, Microsoft, Google, Keycloak, Duo, or any OpenID Connect provider).
@@ -106,7 +107,7 @@ The full list is in [`.env.example`](.env.example) and [docs/how-it-works.md](do
 
 ## More
 
-- [How it works](docs/how-it-works.md): sessions, Codex and local models, tools in the container, all settings, limits.
+- [How it works](docs/how-it-works.md): sessions, scheduled tasks, Codex and local models, tools in the container, all settings, limits.
 - [Sign in with SSO](docs/sso.md)
 - [Security](docs/security.md)
 

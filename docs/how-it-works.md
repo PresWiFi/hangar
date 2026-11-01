@@ -70,6 +70,19 @@ To start on a repo, open **New session**, pick the parent folder, open **Clone f
 - The workspace is mounted at **the same path** inside the container. That's why `claude --resume` works for sessions started on the host, and the other way around.
 - tmux runs inside the container. Stopping the container ends the tmux sessions but not the conversations. With `HANGAR_AUTORESTORE=true`, they're resumed automatically on the next start. Without it, the sidebar shows a **Restore** button.
 
+## Scheduled tasks
+
+**Scheduled tasks** in the sidebar runs a prompt on a schedule: once, every hour, every day, on chosen weekdays, or a cron expression (`minute hour day-of-month month day-of-week`, for example `0 9 * * 1-5` for 09:00 on weekdays). Times are in the server's time zone (`TZ`).
+
+Each task has its own session, in the sidebar tagged *Scheduled*, and keeps one conversation going:
+
+- If the session is running and the agent is waiting, Hangar types the prompt into it.
+- If the agent is still working on the previous run, that run is **skipped** and logged.
+- If the session was stopped, or the agent exited to a shell, Hangar starts it again, resuming the task's conversation with the prompt as the first message.
+- Runs that were due while Hangar was off are logged as missed, not run late. A one-time task still runs late, then turns itself off.
+
+Tasks run unattended: Claude Code in bypass-permissions mode (Hangar also skips its confirmation screen for these sessions), Codex with full access. Each task card shows the last runs, the session's state, and **Run now**. Changing a task's folder or agent starts a new conversation on the next run; deleting a task leaves its session and conversation in place.
+
 ## Tools inside the container
 
 Claude runs inside the container, so its commands use what's installed there. The image starts with git, curl, ripgrep, jq, Python 3.12, and a few basics. There are three ways to get more:

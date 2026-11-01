@@ -12,6 +12,7 @@ Hangar gives whoever signs in a shell on your machine, with Claude Code and your
 - A terminal can still `cd` anywhere the container can see, so only mount what you need.
 - In Docker, the container user has passwordless sudo inside the container (unless `ALLOW_SUDO=false`). That gives root in the container, not on the host, but root in the container can still change everything that's mounted.
 - Linking GitHub stores a GitHub token in `gh`'s config folder (`~/.config/gh`), readable by anyone signed in to Hangar, the same as the Claude login. Clones go only into `HANGAR_WORKSPACES`, and repo names are checked before git runs.
+- Scheduled tasks run with nobody watching: Claude Code in bypass-permissions mode and Codex with full access, so a task can run any command the container allows. Give tasks prompts you'd be comfortable running unsupervised.
 - A llama.cpp server's API key is stored in Hangar's database (`HANGAR_DATA_DIR`) and is never sent back to the browser. Sessions on that server get it in their environment (`ANTHROPIC_AUTH_TOKEN` for Claude Code, `LLAMACPP_API_KEY` for Codex), so anyone signed in to Hangar can read it from a terminal.
 - Hangar reads Claude Code's OAuth token to check usage. It never refreshes or changes it. It reads Codex's `auth.json` to show which account is linked and to check ChatGPT usage the way Codex does; it never refreshes or changes the token.
 - Codex is downloaded from a pinned GitHub release and installed only if its SHA-256 matches the one built into Hangar.
