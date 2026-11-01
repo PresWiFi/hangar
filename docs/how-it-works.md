@@ -21,13 +21,13 @@ Hangar has one account, and only someone who can read its log (where the setup c
 
 ![New session](new-session.png)
 
-- **Claude Code** with your Claude subscription (Opus, Sonnet, Haiku), or with any model on a linked Ollama server.
-- **Codex** with your ChatGPT plan, or with an Ollama model (no ChatGPT sign-in needed for that).
+- **Claude Code** with your Claude subscription (Opus, Sonnet, Haiku), or with any model on a linked Ollama or llama.cpp server.
+- **Codex** with your ChatGPT plan, or with a local model on Ollama or llama.cpp (no ChatGPT sign-in needed for that).
 - **Plain shell.**
 
 Codex sessions get the same treatment as Claude's: they're listed in the sidebar (tagged *Codex*), have a transcript with tool calls, show working/waiting status, can be resumed, forked, and restored after a restart. The dashboard's token activity counts both, and a **ChatGPT usage** card shows your Codex plan limits (also in the sidebar, next to Claude's).
 
-Sessions on Ollama are tagged *Ollama*. Hangar remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
+Sessions on local models are tagged *Ollama* or *llama.cpp*. Hangar remembers which server and model a session used, so **Resume** and restore start it the same way. Claude Code's cost estimate is hidden for them, since it prices local models as if they were Claude.
 
 ## Connecting AI in detail
 
@@ -46,6 +46,11 @@ Codex's own command sandbox can't work inside Docker (it needs user namespaces).
 - **Full access**: no sandbox and no questions. The container is the only boundary.
 
 **Ollama.** Hangar finds Ollama on this machine or the Docker host by itself (`host.docker.internal:11434`); click **Add**. For another machine, enter its address, for example `192.168.1.20` or `http://gpu-box:11434`. That machine's Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`). Claude Code uses Ollama through its Anthropic-compatible API (Ollama 0.14 or later).
+
+**llama.cpp.** Add a `llama-server` (llama.cpp's HTTP server) under **Local models** with the type **llama.cpp**. Hangar finds one on this machine or the Docker host at ports 9931 (llama-server's default) and 8080. For another machine, start it with `--host 0.0.0.0`. If it uses `--api-key`, enter the key; Hangar stores it in its database and never shows it again. Router mode (`llama serve` with several models) works: each model shows up in the model list.
+
+- **Claude Code** uses llama-server's Anthropic-compatible API (`/v1/messages`). Hangar also points Claude Code's background requests at the same model and tells it the model's real context size (`CLAUDE_CODE_MAX_CONTEXT_TOKENS`, read from `/props`), so it compacts the conversation in time. Claude Code's system prompt and tools need a lot of context: give the server at least 32k (`-c 65536` or more). Hangar warns when it's smaller.
+- **Codex** uses llama-server's Responses API (`/v1/responses`) as a custom model provider.
 
 ## GitHub in detail
 
@@ -113,7 +118,7 @@ Turn on HTTPS certificates for your tailnet first (admin console > DNS). With th
 - The "cost" on a session is Claude Code's API-equivalent estimate, not what a subscription charges.
 - Live status (working, waiting) comes from the files Claude Code writes in `~/.claude/sessions`, matched to processes Hangar can see. For Codex it comes from the turn events in its log.
 - ChatGPT usage is checked every 5 minutes with the same request Codex's `/status` makes, using the token Codex saved. Hangar never refreshes that token; if it has expired, the card shows the limits from Codex's last reply until you use Codex again. The endpoint is unofficial, like Claude's.
-- Local models through Ollama are much weaker agents than Claude or GPT, and Claude Code features Ollama doesn't support (prompt caching, token counting) are skipped. The first message to a model that isn't loaded can take a minute.
+- Local models through Ollama or llama.cpp are much weaker agents than Claude or GPT, and Claude Code features Ollama doesn't support (prompt caching, token counting) are skipped. The first message to a model that isn't loaded can take a minute.
 
 ## Code layout
 

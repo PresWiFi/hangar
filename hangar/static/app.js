@@ -299,11 +299,11 @@ const windowShort = (m) => ({ 300: "5h", 10080: "7d", 43200: "30d" }[m] || (m ? 
 const windowLong = (m) => ({ 300: "5-hour limit", 10080: "Weekly limit", 43200: "30-day limit" }[m] || (m ? `${windowShort(m)} limit` : "Limit"));
 const isoFromUnix = (t) => (t ? new Date(t * 1000).toISOString() : null);
 const agentName = (s) => (s.agent === "codex" ? "Codex" : "Claude");
-/* Short tag for the sidebar: which agent, and whether it runs on an Ollama model. */
+/* Short tag for the sidebar: which agent, and whether it runs on a local model (Ollama or llama.cpp). */
 function agentTag(s) {
   const parts = [];
   if (s.agent === "codex") parts.push("Codex");
-  if (s.ollama) parts.push("Ollama");
+  if (s.ollama) parts.push(s.local_kind || "Ollama");
   return parts.join(" + ");
 }
 
@@ -521,7 +521,7 @@ function topbar(title) {
 function providerCards(root) {
   let disposed = false;
   let poll = null;
-  const ui = { claudeCode: "", codexUrl: "", ollamaUrl: "", ollamaName: "", githubToken: "", githubTokenMode: false, found: null, busy: {} };
+  const ui = { claudeCode: "", codexUrl: "", ollamaUrl: "", ollamaName: "", ollamaKind: "ollama", ollamaKey: "", githubToken: "", githubTokenMode: false, found: null, busy: {} };
   let data = null;
 
   const plan = (p) => (p ? ` · ${esc(p[0].toUpperCase() + p.slice(1))} plan` : "");
@@ -600,21 +600,34 @@ function providerCards(root) {
       ${body}${errLine("codex-error")}</section>`;
   }
 
+  /* Local model servers: Ollama and llama.cpp. */
+  const KIND = { ollama: { label: "Ollama", port: 11434 }, llamacpp: { label: "llama.cpp", port: 9931 } };
+  const kindLabel = (k) => (KIND[k] || KIND.ollama).label;
   function ollamaCard(o) {
+    const count = (n) => `${n} model${n === 1 ? "" : "s"}`;
     const rows = o.servers.map((sv) => `<li class="server">
-        <div><b>${esc(sv.name)}</b> <code>${esc(sv.url)}</code><br>
-          ${sv.ok ? `<span class="ok-text">✓ Ollama ${esc(sv.version || "")} · ${sv.models.length} model${sv.models.length === 1 ? "" : "s"}</span>`
-            : `<span class="error">${esc(sv.error)}</span>`}</div>
+        <div><b>${esc(sv.name)}</b> <span class="tag">${esc(kindLabel(sv.kind))}</span> <code>${esc(sv.url)}</code>
+          ${sv.ok ? `<span class="ok-text">✓ ${esc(kindLabel(sv.kind))} ${esc(sv.version || "")} · ${count(sv.models.length)}${sv.has_key ? " · API key" : ""}</span>`
+            : `<span class="error">${esc(sv.error)}</span>`}
+          ${sv.warning ? `<br><span class="hint warn">${esc(sv.warning)}</span>` : ""}</div>
         <button class="btn small ghost" data-pa="ollama-remove" data-id="${esc(sv.id)}" aria-label="Remove ${esc(sv.name)}">Remove</button></li>`).join("");
     const found = (ui.found || []).map((f) => `<li class="server found">
-        <div>Found Ollama at <code>${esc(f.url)}</code><br><span class="muted">${f.models.length} model${f.models.length === 1 ? "" : "s"}</span></div>
-        <button class="btn small" data-pa="ollama-add-found" data-url="${esc(f.url)}">Add</button></li>`).join("");
-    return `<section class="card provider" aria-labelledby="pv-ollama"><h3 id="pv-ollama">Ollama <small>local models</small></h3>
+        <div>Found ${esc(kindLabel(f.kind))} at <code>${esc(f.url)}</code><span class="muted">${count(f.models.length)}</span></div>
+        <button class="btn small" data-pa="ollama-add-found" data-url="${esc(f.url)}" data-kind="${esc(f.kind || "ollama")}">Add</button></li>`).join("");
+    const llama = ui.ollamaKind === "llamacpp";
+    return `<section class="card provider" aria-labelledby="pv-ollama"><h3 id="pv-ollama">Local models <small>Ollama, llama.cpp</small></h3>
       <p class="muted">Run open models on this machine or another one on your network. Claude Code and Codex sessions can use them.</p>
       ${rows || found ? `<ul class="servers">${rows}${found}</ul>` : ""}
       <form class="ollama-form" data-pf="ollama-add">
-        <label class="field"><span>Address</span><input type="text" id="ollama-url" placeholder="http://192.168.1.20:11434" value="${esc(ui.ollamaUrl)}" required></label>
+        <fieldset class="field agent-pick"><legend>Server type</legend>
+          <label class="seg"><input type="radio" name="ollama-kind" value="ollama"${llama ? "" : " checked"}><span>Ollama</span></label>
+          <label class="seg"><input type="radio" name="ollama-kind" value="llamacpp"${llama ? " checked" : ""}><span>llama.cpp</span></label>
+        </fieldset>
+        <label class="field"><span>Address</span><input type="text" id="ollama-url" placeholder="http://192.168.1.20:${KIND[ui.ollamaKind].port}" value="${esc(ui.ollamaUrl)}" required></label>
+        ${llama ? `<label class="field"><span>API key <small>(only if llama-server uses --api-key)</small></span><input type="password" id="ollama-key" autocomplete="off" value="${esc(ui.ollamaKey)}"></label>` : ""}
         <label class="field"><span>Name <small>(optional)</small></span><input type="text" id="ollama-name" maxlength="60" placeholder="Desktop GPU" value="${esc(ui.ollamaName)}"></label>
+        <p class="hint">${llama ? "Start llama-server with <code>--host 0.0.0.0</code> so other machines can reach it, and a context of at least 32k (<code>-c 65536</code>) for Claude Code."
+          : "Ollama on another machine must listen on the network (<code>OLLAMA_HOST=0.0.0.0</code>)."}</p>
         <div class="form-actions"><button class="btn primary" type="submit">Add server</button></div>
       </form>${errLine("ollama-error")}</section>`;
   }
@@ -730,7 +743,7 @@ function providerCards(root) {
       else if (what === "github-token-mode") { ui.githubTokenMode = !ui.githubTokenMode; ui.githubToken = ""; }
       else if (what === "ollama-remove") { await api(`/api/providers/ollama/${el.dataset.id}`, { method: "DELETE" }); data.ollama = await api("/api/providers/ollama"); }
       else if (what === "ollama-add-found") {
-        await api("/api/providers/ollama", { method: "POST", body: { url: el.dataset.url } });
+        await api("/api/providers/ollama", { method: "POST", body: { url: el.dataset.url, kind: el.dataset.kind } });
         ui.found = ui.found.filter((f) => f.url !== el.dataset.url);
         data.ollama = await api("/api/providers/ollama");
       }
@@ -764,13 +777,14 @@ function providerCards(root) {
       } else if (what === "ollama-add") {
         ui.ollamaUrl = $("#ollama-url", root).value;
         ui.ollamaName = $("#ollama-name", root).value;
-        const t = await api("/api/providers/ollama/test", { method: "POST", body: { url: ui.ollamaUrl } });
+        const server = { url: ui.ollamaUrl, name: ui.ollamaName, kind: ui.ollamaKind, api_key: ui.ollamaKind === "llamacpp" ? ui.ollamaKey : "" };
+        const t = await api("/api/providers/ollama/test", { method: "POST", body: server });
         if (!t.ok) throw new Error(t.error);
-        await api("/api/providers/ollama", { method: "POST", body: { url: ui.ollamaUrl, name: ui.ollamaName } });
-        ui.ollamaUrl = ui.ollamaName = "";
+        await api("/api/providers/ollama", { method: "POST", body: server });
+        ui.ollamaUrl = ui.ollamaName = ui.ollamaKey = "";
         ui.found = (ui.found || []).filter((f) => f.url !== t.url);
         data.ollama = await api("/api/providers/ollama");
-        toast(`Added Ollama with ${t.models.length} model${t.models.length === 1 ? "" : "s"}`);
+        toast(`Added ${kindLabel(server.kind)} with ${t.models.length} model${t.models.length === 1 ? "" : "s"}`);
       }
       render();
     } catch (ex) {
@@ -790,8 +804,9 @@ function providerCards(root) {
   });
   // The cards re-render while Codex installs or signs in; keep whatever was typed in the meantime.
   root.addEventListener("input", (e) => {
-    const map = { "claude-code": "claudeCode", "codex-url": "codexUrl", "ollama-url": "ollamaUrl", "ollama-name": "ollamaName", "github-token": "githubToken" };
+    const map = { "claude-code": "claudeCode", "codex-url": "codexUrl", "ollama-url": "ollamaUrl", "ollama-name": "ollamaName", "ollama-key": "ollamaKey", "github-token": "githubToken" };
     if (map[e.target.id]) ui[map[e.target.id]] = e.target.value;
+    if (e.target.name === "ollama-kind") { ui.ollamaKind = e.target.value; render(); }
   });
   root.addEventListener("submit", (e) => {
     const f = e.target.closest("[data-pf]");
@@ -1187,7 +1202,7 @@ function sessionView({ id, tmuxName }) {
       s.cwd && `<span title="${esc(s.cwd)}">${esc(s.cwd.replace(/^.*\/([^/]+\/[^/]+)$/, "…/$1"))}</span>`,
       s.git_branch && `<span>⎇ ${esc(s.git_branch)}</span>`,
       s.agent === "codex" && `<span class="tag">Codex${s.codex_mode ? ` · ${s.codex_mode === "full" ? "Full access" : "Asks before commands"}` : ""}</span>`,
-      s.ollama && `<span class="tag" title="Runs on an Ollama model">Ollama · ${esc(s.ollama)}</span>`,
+      s.ollama && `<span class="tag" title="Runs on a local model">${esc(s.local_kind || "Ollama")} · ${esc(s.ollama)}</span>`,
       s.models?.length && !s.ollama && `<span>${esc(s.models.join(", "))}</span>`,
       tk != null && `<span>${fmt.tokens(tk)} tokens in/out</span>`,
       s.cost != null && `<span>${fmt.money(s.cost)} API-equivalent</span>`,
@@ -1635,7 +1650,7 @@ async function openNewSession() {
 
   function ollamaOptions() {
     const servers = (avail.ollama || []).filter((sv) => sv.ok && sv.models.length);
-    return servers.map((sv) => `<optgroup label="Ollama · ${esc(sv.name)}">${sv.models.map((m) =>
+    return servers.map((sv) => `<optgroup label="${sv.kind === "llamacpp" ? "llama.cpp" : "Ollama"} · ${esc(sv.name)}">${sv.models.map((m) =>
       `<option value="ollama:${esc(sv.id)}:${esc(m.name)}">${esc(m.name)}${m.size ? ` (${esc(m.size)})` : ""}</option>`).join("")}</optgroup>`).join("");
   }
 
@@ -1657,10 +1672,10 @@ async function openNewSession() {
     if (a === "codex") {
       if (!x) note = "Checking Codex…";
       else if (!x.installed) note = `Codex isn't installed yet. <a href="#/settings">Link ChatGPT in Settings</a>.`;
-      else if (!x.linked && !$("#nf-model").options.length) note = `Sign in with ChatGPT in <a href="#/settings">Settings</a>, or add an Ollama server to use Codex with a local model.`;
-      else if (!x.linked) note = "Not signed in to ChatGPT, so Codex can only use Ollama models.";
+      else if (!x.linked && !$("#nf-model").options.length) note = `Sign in with ChatGPT in <a href="#/settings">Settings</a>, or add a local model server (Ollama or llama.cpp) to use Codex with a local model.`;
+      else if (!x.linked) note = "Not signed in to ChatGPT, so Codex can only use local models.";
     }
-    if (avail.ollama === null && a !== "shell") note += `${note ? " " : ""}Looking for Ollama models…`;
+    if (avail.ollama === null && a !== "shell") note += `${note ? " " : ""}Looking for local models…`;
     $("#nf-agent-note").innerHTML = note;
     $("#nf-go").disabled = a === "codex" && (!x?.installed || !$("#nf-model").options.length);
   }

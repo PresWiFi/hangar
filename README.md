@@ -2,7 +2,7 @@
 
 **Park your coding agent sessions. Pick them back up from any device.**
 
-Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex). Every session runs in tmux, so it keeps going when you close the browser, and you can reopen it from your laptop, phone, or tablet. It works with your Claude or ChatGPT plan (no API keys) or local models through Ollama.
+Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex). Every session runs in tmux, so it keeps going when you close the browser, and you can reopen it from your laptop, phone, or tablet. It works with your Claude or ChatGPT plan (no API keys) or local models through Ollama or llama.cpp.
 
 ![Dashboard](docs/dashboard.png)
 
@@ -63,7 +63,7 @@ Hangar asks after setup; you can also do it later in **Settings**.
 
 - **Claude**: click **Sign in with Claude** and paste back the code claude.ai shows. Uses your Pro or Max plan.
 - **ChatGPT**: Hangar downloads Codex for you, then shows a device code to enter. First turn on **device code sign-in** in ChatGPT under **Settings > Security**.
-- **Ollama**: found automatically on this machine. For another machine, enter its address (its Ollama must listen with `OLLAMA_HOST=0.0.0.0`).
+- **Local models**: Ollama and llama.cpp servers on this machine are found automatically. For another machine, pick the type and enter its address. Ollama must listen with `OLLAMA_HOST=0.0.0.0`; start `llama-server` with `--host 0.0.0.0` and at least 32k context (`-c 65536`).
 - **GitHub**: click **Sign in with GitHub** and enter the code on GitHub, or paste a token with the `repo`, `read:org`, and `workflow` scopes. Then use **New session > Clone from GitHub** to clone a repo.
 
 ## Reach it from other devices
@@ -106,7 +106,7 @@ The full list is in [`.env.example`](.env.example) and [docs/how-it-works.md](do
 
 ## More
 
-- [How it works](docs/how-it-works.md): sessions, Codex and Ollama, tools in the container, all settings, limits.
+- [How it works](docs/how-it-works.md): sessions, Codex and local models, tools in the container, all settings, limits.
 - [Sign in with SSO](docs/sso.md)
 - [Security](docs/security.md)
 
