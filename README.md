@@ -6,6 +6,10 @@ Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs
 
 ![Dashboard](docs/dashboard.png)
 
+**Start here:** [Install with Docker](#docker) · [Use it from your phone](#reach-it-from-other-devices) · [How it works](docs/how-it-works.md)
+
+If Hangar is useful to you, [star the repository](https://github.com/PresWiFi/hangar) to help other developers discover it. Found a setup problem? [Open an issue](https://github.com/PresWiFi/hangar/issues/new) with your OS, install method, and the error, with credentials removed.
+
 ## Features
 
 - **Sessions in a sidebar**, titled automatically and searchable, each with a live terminal and a readable transcript.
