@@ -232,7 +232,8 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
                 model: str = "", permission_mode: str = "", shell_only: bool = False, prompt: str = "",
                 agent: str = "claude", codex_mode: str = "ask", ollama: dict | None = None) -> dict:
     """Start Claude, Codex, or a plain shell in a new tmux session. `prompt` is sent as the opening message.
-    `ollama` is {"server": id, "url": base url, "model": name} to run the agent on an Ollama model."""
+    `ollama` is {"server": id, "url": base url, "model": name, "kind": "ollama" | "llamacpp", "api_key": ""}
+    to run the agent on a local model server's model."""
     cwd = os.path.realpath(os.path.expanduser(cwd))
     if not os.path.isdir(cwd):
         raise TmuxError(f"Folder not found: {cwd}")
@@ -243,8 +244,12 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
     name = _unique_name("hg-" + _slug(label or Path(cwd).name))
     env = {"TERM": "xterm-256color", "COLORTERM": "truecolor", "CODEX_HOME": str(settings.codex_home)}
     launch: dict = {"agent": agent}
+    local_kind = (ollama or {}).get("kind") or "ollama"
     if ollama:
+        # Never the API key: launch info is stored with the session.
         launch["ollama"] = {"server": ollama.get("server"), "model": ollama["model"]}
+        if local_kind != "ollama":
+            launch["ollama"]["kind"] = local_kind
         model = ollama["model"]
     claude_id = ""
 
@@ -256,7 +261,14 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         if label and not resume:
             launch["label"] = label
         flags = ["--no-daemon", *CODEX_MODES[codex_mode]]
-        if ollama:
+        if ollama and local_kind == "llamacpp":
+            # A custom provider on llama-server's Responses API.
+            flags += ["-c", 'model_provider="llamacpp"', "-c", 'model_providers.llamacpp.name="llama.cpp"',
+                      "-c", f"model_providers.llamacpp.base_url={json.dumps(ollama['url'].rstrip('/') + '/v1')}"]
+            if ollama.get("api_key"):
+                env["LLAMACPP_API_KEY"] = ollama["api_key"]
+                flags += ["-c", 'model_providers.llamacpp.env_key="LLAMACPP_API_KEY"']
+        elif ollama:
             env["CODEX_OSS_BASE_URL"] = ollama["url"].rstrip("/") + "/v1"
             flags += ["-c", 'model_provider="ollama"']
         if model:
@@ -269,8 +281,17 @@ def new_session(cwd: str, *, label: str = "", resume: str | None = None, fork: b
         command = codex_command(args)
     else:
         if ollama:
-            env.update({"ANTHROPIC_BASE_URL": ollama["url"].rstrip("/"), "ANTHROPIC_AUTH_TOKEN": "ollama",
-                        "ANTHROPIC_API_KEY": ""})
+            env.update({"ANTHROPIC_BASE_URL": ollama["url"].rstrip("/"),
+                        "ANTHROPIC_AUTH_TOKEN": ollama.get("api_key") or local_kind, "ANTHROPIC_API_KEY": ""})
+            if local_kind == "llamacpp":
+                # Claude Code sends background requests to a Haiku model by name; send them to this one instead.
+                env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = ollama["model"]
+                # It doesn't know local models' context size and assumes 200k; give it the real one so it
+                # compacts in time.
+                from .providers import ollama as servers
+                n_ctx = servers.context_tokens(ollama, ollama["model"])
+                if n_ctx:
+                    env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(n_ctx)
         if resume:
             claude_id = resume
             extra = ["--resume", resume] + (["--fork-session"] if fork else [])
@@ -367,5 +388,5 @@ def resume_options(session_id: str, agent: str) -> dict:
         from .providers import ollama
         server = ollama.get(o.get("server") or "")
         if server:
-            opts["ollama"] = {"server": server["id"], "url": server["url"], "model": o["model"]}
+            opts["ollama"] = ollama.launch_info(server, o["model"])
     return opts

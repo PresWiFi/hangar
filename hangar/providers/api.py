@@ -1,4 +1,4 @@
-"""/api/providers: link and unlink Claude, ChatGPT (Codex), Ollama, and GitHub. Owner only (normal cookie + header)."""
+"""/api/providers: link and unlink Claude, ChatGPT (Codex), local model servers (Ollama, llama.cpp), and GitHub. Owner only (normal cookie + header)."""
 from __future__ import annotations
 
 import asyncio
@@ -101,6 +101,8 @@ async def codex_logout():
 class Server(BaseModel):
     name: str = ""
     url: str
+    kind: str = "ollama"   # ollama | llamacpp
+    api_key: str = ""      # llama.cpp only (llama-server --api-key)
 
 
 @router.get("/ollama")
@@ -115,13 +117,13 @@ async def ollama_discover():
 
 @router.post("/ollama/test")
 async def ollama_test(body: Server):
-    url = await _run(ollama.normalize, body.url)
-    return {"url": url, **await _run(ollama.probe, url)}
+    url = await _run(ollama.normalize, body.url, body.kind)
+    return {"url": url, **await _run(ollama.probe, url, body.kind, body.api_key.strip())}
 
 
 @router.post("/ollama")
 async def ollama_add(body: Server):
-    return await _run(ollama.add, body.name, body.url)
+    return await _run(ollama.add, body.name, body.url, body.kind, body.api_key)
 
 
 @router.delete("/ollama/{server_id}")

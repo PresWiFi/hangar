@@ -229,7 +229,8 @@ def test_resume_repeats_launch(tmux_calls, workspace):
     tmux.remember_launch(SID, {"agent": "codex", "codex_mode": "full", "ollama": {"server": "s1", "model": "m"}})
     opts = tmux.resume_options(SID, "codex")
     assert opts == {"agent": "codex", "codex_mode": "full",
-                    "ollama": {"server": "s1", "url": "http://10.0.0.5:11434", "model": "m"}}
+                    "ollama": {"server": "s1", "url": "http://10.0.0.5:11434", "model": "m", "kind": "ollama",
+                               "api_key": ""}}
     tmux.new_session(str(workspace), resume=SID, **opts)
     cmd, env, _ = started(tmux_calls)
     assert cmd.startswith(f"/opt/codex/bin/codex resume --no-daemon -s danger-full-access")

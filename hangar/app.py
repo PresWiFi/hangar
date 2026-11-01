@@ -408,7 +408,9 @@ def _merge(summary: dict | None, meta: dict | None, live: dict | None) -> dict:
     if live and live.get("launch"):
         launch = {**live["launch"], **launch}
     out["agent"] = out.get("agent") or (live or {}).get("agent") or launch.get("agent") or "claude"
-    out["ollama"] = (launch.get("ollama") or {}).get("model")
+    local = launch.get("ollama") or {}
+    out["ollama"] = local.get("model")  # the local model, on Ollama or llama.cpp
+    out["local_kind"] = ollama_servers.label(local.get("kind")) if out["ollama"] else None
     if out["ollama"]:
         out["cost"] = None  # Claude Code prices local models as if they were Claude; that number means nothing
     out["codex_mode"] = launch.get("codex_mode") if out["agent"] == "codex" else None
@@ -507,7 +509,7 @@ class NewIn(BaseModel):
     shell: bool = False
     agent: str = "claude"
     codex_mode: str = "ask"
-    ollama_server: str = ""     # run on this Ollama server's model instead of the agent's own service
+    ollama_server: str = ""     # run on this local server's model (Ollama or llama.cpp) instead of the agent's own service
     ollama_model: str = ""
 
 
@@ -526,10 +528,10 @@ async def tmux_new(body: NewIn):
     if body.ollama_server:
         server = ollama_servers.get(body.ollama_server)
         if not server:
-            raise HTTPException(400, "That Ollama server isn't added any more")
+            raise HTTPException(400, "That model server isn't added any more")
         if not body.ollama_model.strip():
-            raise HTTPException(400, "Pick a model on the Ollama server")
-        ollama = {"server": server["id"], "url": server["url"], "model": body.ollama_model.strip()}
+            raise HTTPException(400, "Pick a model on the server")
+        ollama = ollama_servers.launch_info(server, body.ollama_model.strip())
     try:
         return await asyncio.to_thread(tmux.new_session, body.cwd, label=body.label.strip()[:60],
                                        model=body.model.strip(), permission_mode=body.permission_mode,

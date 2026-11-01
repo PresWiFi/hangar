@@ -322,14 +322,15 @@ def no_servers():
 
 
 def test_ollama_add_list_remove(no_servers, client, monkeypatch):
-    monkeypatch.setattr(ollama, "probe", lambda url, timeout=4: {"ok": True, "version": "9.9", "models": [{"name": "m"}]})
+    monkeypatch.setattr(ollama, "probe", lambda url, kind="ollama", api_key="", timeout=4:
+                        {"ok": True, "version": "9.9", "models": [{"name": "m"}]})
     r = client.post("/api/providers/ollama", json={"name": "Desk", "url": "10.0.0.5"})
     assert r.status_code == 200
     sid = r.json()["id"]
     assert client.post("/api/providers/ollama", json={"url": "http://10.0.0.5:11434"}).status_code == 400
     servers = client.get("/api/providers/ollama").json()["servers"]
-    assert servers == [{"id": sid, "name": "Desk", "url": "http://10.0.0.5:11434", "ok": True, "version": "9.9",
-                        "models": [{"name": "m"}]}]
+    assert servers == [{"id": sid, "name": "Desk", "url": "http://10.0.0.5:11434", "kind": "ollama", "has_key": False,
+                        "ok": True, "version": "9.9", "models": [{"name": "m"}]}]
     assert client.delete(f"/api/providers/ollama/{sid}").status_code == 200
     assert client.delete(f"/api/providers/ollama/{sid}").status_code == 404
     assert client.get("/api/providers/ollama").json()["servers"] == []
