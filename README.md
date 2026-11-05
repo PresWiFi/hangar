@@ -1,7 +1,5 @@
 # Hangar
 
-**Park your coding agent sessions. Pick them back up from any device.**
-
 Hangar is a self-hosted web UI for [Claude Code](https://docs.claude.com/en/docs/claude-code/overview) and OpenAI's [Codex CLI](https://github.com/openai/codex). Every session runs in tmux, so it keeps going when you close the browser, and you can reopen it from your laptop, phone, or tablet. It works with your Claude or ChatGPT plan (no API keys) or local models through Ollama or llama.cpp.
 
 ![Dashboard](docs/dashboard.png)
