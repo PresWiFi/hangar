@@ -109,6 +109,21 @@ Set these in `.env`. The common ones:
 
 The full list is in [`.env.example`](.env.example) and [docs/how-it-works.md](docs/how-it-works.md#all-settings).
 
+## Agent skills
+
+Two skills from Hangar work in Claude Code, Codex, Cursor, and other agents without Hangar installed:
+
+- [`session-finder`](skills/session-finder/SKILL.md): search past Claude Code and Codex sessions across projects, read their transcripts, and get the command to resume or fork one. Reads local logs only.
+- [`hangar-setup`](skills/hangar-setup/SKILL.md): walks your agent through installing and configuring Hangar.
+
+Install both in Claude Code:
+
+```
+/plugin install hangar --marketplace PresWiFi/hangar
+```
+
+For other agents, copy a folder from [`skills/`](skills) into the agent's skills folder.
+
 ## More
 
 - [How it works](docs/how-it-works.md): sessions, scheduled tasks, Codex and local models, tools in the container, all settings, limits.

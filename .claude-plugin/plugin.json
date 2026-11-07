@@ -1,0 +1,10 @@
+{
+  "name": "hangar",
+  "version": "0.4.0",
+  "description": "Find, search, and resume past Claude Code and Codex sessions, and set up Hangar, the self-hosted web UI for coding agents.",
+  "author": { "name": "PresWiFi", "url": "https://github.com/PresWiFi" },
+  "homepage": "https://github.com/PresWiFi/hangar",
+  "repository": "https://github.com/PresWiFi/hangar",
+  "license": "MIT",
+  "keywords": ["sessions", "resume", "codex", "tmux", "self-hosted"]
+}

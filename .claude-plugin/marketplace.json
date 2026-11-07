@@ -1,0 +1,11 @@
+{
+  "name": "hangar",
+  "owner": { "name": "PresWiFi", "url": "https://github.com/PresWiFi" },
+  "plugins": [
+    {
+      "name": "hangar",
+      "source": "./",
+      "description": "Find, search, and resume past Claude Code and Codex sessions, and set up Hangar."
+    }
+  ]
+}
