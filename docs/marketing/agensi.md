@@ -36,3 +36,14 @@ Before submitting, check that each skill passes the scan rules:
 **hangar-setup**: Use Claude Code and Codex from your phone. This skill has your agent install Hangar, a free, self-hosted web UI where every session runs in tmux and keeps going when you close the browser. It covers Docker, Proxmox, plain Linux or macOS, Tailscale, and SSO.
 
 After approval, put the affiliate link in the README's Agent skills section next to the plugin install line.
+
+## Images and packages
+
+Everything to upload is in [`agensi/`](agensi):
+
+| Skill | Package | Logo (512×512) | Screenshots (1600×1000, in order) |
+|---|---|---|---|
+| session-finder | `session-finder.zip` | `session-finder-logo.png` | `session-finder-1.png` to `-4.png` |
+| hangar-setup | `hangar-setup.zip` | `hangar-setup-logo.png` | `hangar-setup-1.png` to `-4.png` |
+
+The session-finder screenshots show the script's real output, run on made-up demo sessions. The hangar-setup screenshots reuse the README screenshots. Rebuild the ZIPs whenever a skill changes (see Upload above).
